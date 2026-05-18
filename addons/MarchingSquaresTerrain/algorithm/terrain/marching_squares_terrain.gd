@@ -74,6 +74,12 @@ enum StorageMode {
 ## Tracks the mode used during the last successful save for reporting purposes.
 @export_storage var _last_storage_mode : StorageMode = StorageMode.BAKED
 
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_names: Array[String] = [
+	"Texture 1", "Texture 2", "Texture 3", "Texture 4", "Texture 5",
+	"Texture 6", "Texture 7", "Texture 8", "Texture 9", "Texture 10",
+	"Texture 11", "Texture 12", "Texture 13", "Texture 14", "Texture 15"
+]
+
 #region global terrain settings
 # Terrain Settings
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var dimensions : Vector3i = Vector3i(33, 32, 33): # Total amount of height values in X and Z direction, and total height range
@@ -140,13 +146,54 @@ enum StorageMode {
 		use_ledge_texture = value
 		terrain_material.set_shader_parameter("use_ledge_texture", value)
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var noise_hmap : Noise # used to generate smooth initial heights for more natrual looking terrain. if null, initial terrain will be flat
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var global_noise_scale: float = 0.08:
+	set(value):
+		global_noise_scale = value
+		terrain_material.set_shader_parameter("global_noise_scale", value)
+		var grass_mat := grass_mesh.material as ShaderMaterial
+		grass_mat.set_shader_parameter("global_noise_scale", value)
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var global_noise_strength: float = 0.0:
+	set(value):
+		global_noise_strength = value
+		terrain_material.set_shader_parameter("global_noise_strength", value)
+		var grass_mat := grass_mesh.material as ShaderMaterial
+		grass_mat.set_shader_parameter("global_noise_strength", value)
 
 # Grass settings
+@export var rebuild_grass_now: bool = false:
+	set(value):
+		rebuild_grass_now = false
+		if not value:
+			return
+		for chunk: MarchingSquaresTerrainChunk in chunks.values():
+			if chunk and chunk.grass_planter:
+				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var animation_fps : int = 0:
 	set(value):
 		animation_fps = clamp(value, 0, 30)
 		var grass_mat := grass_mesh.material as ShaderMaterial
 		grass_mat.set_shader_parameter("fps", clamp(value, 0, 30))
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var wind_mode : int = 0:
+	set(value):
+		wind_mode = value
+		var grass_mat := grass_mesh.material as ShaderMaterial
+		grass_mat.set_shader_parameter("wind_mode", value)
+@export_custom(PROPERTY_HINT_RANGE, "0.0, 1.0, 0.01", PROPERTY_USAGE_STORAGE) var wind_intensity : float = 0.5:
+	set(value):
+		wind_intensity = value
+		var grass_mat := grass_mesh.material as ShaderMaterial
+		grass_mat.set_shader_parameter("wind_intensity", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var wind_tip_color : Color = Color(1.0, 1.0, 1.0, 1.0):
+	set(value):
+		wind_tip_color = value
+		var grass_mat := grass_mesh.material as ShaderMaterial
+		grass_mat.set_shader_parameter("wind_tip_color", value)
+@export_custom(PROPERTY_HINT_RANGE, "0.0, 1.0, 0.01", PROPERTY_USAGE_STORAGE) var wind_tip_strength : float = 0.3:
+	set(value):
+		wind_tip_strength = value
+		var grass_mat := grass_mesh.material as ShaderMaterial
+		grass_mat.set_shader_parameter("wind_tip_strength", value)
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_subdivisions : int = 3:
 	set(value):
 		grass_subdivisions = value
@@ -161,10 +208,29 @@ enum StorageMode {
 		for chunk: MarchingSquaresTerrainChunk in chunks.values():
 			chunk.grass_planter.multimesh.mesh.size = scaled_value
 			chunk.grass_planter.multimesh.mesh.center_offset.y = scaled_value.y / 2.0
+@export_custom(PROPERTY_HINT_RANGE, "0.0, 1.0, 0.01", PROPERTY_USAGE_STORAGE) var grass_size_variation : float = 0.0:
+	set(value):
+		grass_size_variation = clampf(value, 0.0, 1.0)
+		if not is_batch_updating and Engine.is_editor_hint():
+			for chunk: MarchingSquaresTerrainChunk in chunks.values():
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
+@export_custom(PROPERTY_HINT_RANGE, "0.005, 0.5, 0.005", PROPERTY_USAGE_STORAGE) var color_variation_scale : float = 0.08:
+	set(value):
+		color_variation_scale = value
+		if not is_batch_updating:
+			var grass_mat := grass_mesh.material as ShaderMaterial
+			grass_mat.set_shader_parameter("color_variation_scale", value)
+@export_custom(PROPERTY_HINT_RANGE, "0.0, 1.0, 0.01", PROPERTY_USAGE_STORAGE) var color_variation_strength : float = 1.0:
+	set(value):
+		color_variation_strength = value
+		if not is_batch_updating:
+			var grass_mat := grass_mesh.material as ShaderMaterial
+			grass_mat.set_shader_parameter("color_variation_strength", value)
 #endregion
 
 #region vertex painting texture settings
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_1 : Texture2D = preload("uid://dbnc04k3n0sro"):
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_1 : Texture2D = null:
 	set(value):
 		texture_1 = value
 		if not is_batch_updating:
@@ -176,7 +242,7 @@ enum StorageMode {
 				grass_mat.set_shader_parameter("use_base_color_1", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_2 : Texture2D = preload("uid://dbnc04k3n0sro"):
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_2 : Texture2D = null:
 	set(value):
 		texture_2 = value
 		if not is_batch_updating:
@@ -188,7 +254,7 @@ enum StorageMode {
 				grass_mat.set_shader_parameter("use_base_color_2", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_3 : Texture2D = preload("uid://dbnc04k3n0sro"):
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_3 : Texture2D = null:
 	set(value):
 		texture_3 = value
 		if not is_batch_updating:
@@ -200,7 +266,7 @@ enum StorageMode {
 				grass_mat.set_shader_parameter("use_base_color_3", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_4 : Texture2D = preload("uid://dbnc04k3n0sro"):
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_4 : Texture2D = null:
 	set(value):
 		texture_4 = value
 		if not is_batch_updating:
@@ -212,7 +278,7 @@ enum StorageMode {
 				grass_mat.set_shader_parameter("use_base_color_4", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_5 : Texture2D = preload("uid://dbnc04k3n0sro"):
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_5 : Texture2D = null:
 	set(value):
 		texture_5 = value
 		if not is_batch_updating:
@@ -224,7 +290,7 @@ enum StorageMode {
 				grass_mat.set_shader_parameter("use_base_color_5", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_6 : Texture2D = preload("uid://cv87twjgbqq0s"):
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_6 : Texture2D = null:
 	set(value):
 		texture_6 = value
 		if not is_batch_updating:
@@ -374,48 +440,155 @@ enum StorageMode {
 #endregion
 
 #region texture albedos
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_albedo_1 : Color = Color("647851ff"):
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex1_color_1 : Color = Color("647851ff"):
 	set(value):
-		texture_albedo_1 = value
+		tex1_color_1 = value
 		if not is_batch_updating:
-			terrain_material.set_shader_parameter("tex_albedo_1", value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_color_1", value)
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_albedo_2 : Color = Color("527b62ff"):
+			terrain_material.set_shader_parameter("tex1_color_1", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex1_color_1", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex1_color_2 : Color = Color("527b62ff"):
 	set(value):
-		texture_albedo_2 = value
+		tex1_color_2 = value
 		if not is_batch_updating:
-			terrain_material.set_shader_parameter("tex_albedo_2", value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_color_2", value)
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_albedo_3 : Color = Color("5f6c4bff"):
+			terrain_material.set_shader_parameter("tex1_color_2", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex1_color_2", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex1_color_3 : Color = Color("5f6c4bff"):
 	set(value):
-		texture_albedo_3 = value
+		tex1_color_3 = value
 		if not is_batch_updating:
-			terrain_material.set_shader_parameter("tex_albedo_3", value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_color_3", value)
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_albedo_4 : Color = Color("647941ff"):
+			terrain_material.set_shader_parameter("tex1_color_3", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex1_color_3", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex1_color_4 : Color = Color("647941ff"):
 	set(value):
-		texture_albedo_4 = value
+		tex1_color_4 = value
 		if not is_batch_updating:
-			terrain_material.set_shader_parameter("tex_albedo_4", value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_color_4", value)
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_albedo_5 : Color = Color("4a7e5dff"):
+			terrain_material.set_shader_parameter("tex1_color_4", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex1_color_4", value)
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex2_color_1 : Color = Color("647851ff"):
 	set(value):
-		texture_albedo_5 = value
+		tex2_color_1 = value
 		if not is_batch_updating:
-			terrain_material.set_shader_parameter("tex_albedo_5", value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_color_5", value)
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_albedo_6 : Color = Color("71725dff"):
+			terrain_material.set_shader_parameter("tex2_color_1", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex2_color_1", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex2_color_2 : Color = Color("527b62ff"):
 	set(value):
-		texture_albedo_6 = value
+		tex2_color_2 = value
 		if not is_batch_updating:
-			terrain_material.set_shader_parameter("tex_albedo_6", value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_color_6", value)
+			terrain_material.set_shader_parameter("tex2_color_2", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex2_color_2", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex2_color_3 : Color = Color("5f6c4bff"):
+	set(value):
+		tex2_color_3 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex2_color_3", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex2_color_3", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex2_color_4 : Color = Color("647941ff"):
+	set(value):
+		tex2_color_4 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex2_color_4", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex2_color_4", value)
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex3_color_1 : Color = Color("647851ff"):
+	set(value):
+		tex3_color_1 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex3_color_1", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex3_color_1", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex3_color_2 : Color = Color("527b62ff"):
+	set(value):
+		tex3_color_2 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex3_color_2", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex3_color_2", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex3_color_3 : Color = Color("5f6c4bff"):
+	set(value):
+		tex3_color_3 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex3_color_3", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex3_color_3", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex3_color_4 : Color = Color("647941ff"):
+	set(value):
+		tex3_color_4 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex3_color_4", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex3_color_4", value)
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex4_color_1 : Color = Color("647851ff"):
+	set(value):
+		tex4_color_1 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex4_color_1", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex4_color_1", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex4_color_2 : Color = Color("527b62ff"):
+	set(value):
+		tex4_color_2 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex4_color_2", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex4_color_2", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex4_color_3 : Color = Color("5f6c4bff"):
+	set(value):
+		tex4_color_3 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex4_color_3", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex4_color_3", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex4_color_4 : Color = Color("647941ff"):
+	set(value):
+		tex4_color_4 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex4_color_4", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex4_color_4", value)
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex5_color_1 : Color = Color("647851ff"):
+	set(value):
+		tex5_color_1 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex5_color_1", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex5_color_1", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex5_color_2 : Color = Color("527b62ff"):
+	set(value):
+		tex5_color_2 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex5_color_2", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex5_color_2", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex5_color_3 : Color = Color("5f6c4bff"):
+	set(value):
+		tex5_color_3 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex5_color_3", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex5_color_3", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex5_color_4 : Color = Color("647941ff"):
+	set(value):
+		tex5_color_4 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex5_color_4", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex5_color_4", value)
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex6_color_1 : Color = Color("647851ff"):
+	set(value):
+		tex6_color_1 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex6_color_1", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex6_color_1", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex6_color_2 : Color = Color("527b62ff"):
+	set(value):
+		tex6_color_2 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex6_color_2", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex6_color_2", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex6_color_3 : Color = Color("5f6c4bff"):
+	set(value):
+		tex6_color_3 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex6_color_3", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex6_color_3", value)
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex6_color_4 : Color = Color("647941ff"):
+	set(value):
+		tex6_color_4 = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("tex6_color_4", value)
+			(grass_mesh.material as ShaderMaterial).set_shader_parameter("tex6_color_4", value)
 #endregion
 
 #region texture scales
@@ -507,7 +680,6 @@ signal load_finished
 
 var void_texture := preload("uid://csvthlqhb8g5j")
 var placeholder_wind_texture := preload("uid://dk1t5hy2tiil7") # Change to your own texture
-var placeholder_rl_noise_texture := preload("uid://85iqlmnoua0e") # Change to your own texture
 
 var terrain_material : ShaderMaterial = null
 var grass_mesh : QuadMesh = null 
@@ -757,8 +929,6 @@ func _ensure_textures() -> void:
 	
 	if grass_mat.get_shader_parameter("wind_texture") == null:
 		grass_mat.set_shader_parameter("wind_texture", placeholder_wind_texture)
-	if terrain_material.get_shader_parameter("rl_noise_texture") == null:
-		terrain_material.set_shader_parameter("rl_noise_texture", placeholder_rl_noise_texture)
 
 
 ## Applies all shader parameters and regenerates grass once
@@ -788,12 +958,30 @@ func force_batch_update() -> void:
 	terrain_material.set_shader_parameter("vc_tex_ab", texture_15)
 	
 	# TERRAIN MATERIAL - Ground Colors (used for both floor and wall in unified system)
-	terrain_material.set_shader_parameter("tex_albedo_1", texture_albedo_1)
-	terrain_material.set_shader_parameter("tex_albedo_2", texture_albedo_2)
-	terrain_material.set_shader_parameter("tex_albedo_3", texture_albedo_3)
-	terrain_material.set_shader_parameter("tex_albedo_4", texture_albedo_4)
-	terrain_material.set_shader_parameter("tex_albedo_5", texture_albedo_5)
-	terrain_material.set_shader_parameter("tex_albedo_6", texture_albedo_6)
+	terrain_material.set_shader_parameter("tex1_color_1", tex1_color_1)
+	terrain_material.set_shader_parameter("tex1_color_2", tex1_color_2)
+	terrain_material.set_shader_parameter("tex1_color_3", tex1_color_3)
+	terrain_material.set_shader_parameter("tex1_color_4", tex1_color_4)
+	terrain_material.set_shader_parameter("tex2_color_1", tex2_color_1)
+	terrain_material.set_shader_parameter("tex2_color_2", tex2_color_2)
+	terrain_material.set_shader_parameter("tex2_color_3", tex2_color_3)
+	terrain_material.set_shader_parameter("tex2_color_4", tex2_color_4)
+	terrain_material.set_shader_parameter("tex3_color_1", tex3_color_1)
+	terrain_material.set_shader_parameter("tex3_color_2", tex3_color_2)
+	terrain_material.set_shader_parameter("tex3_color_3", tex3_color_3)
+	terrain_material.set_shader_parameter("tex3_color_4", tex3_color_4)
+	terrain_material.set_shader_parameter("tex4_color_1", tex4_color_1)
+	terrain_material.set_shader_parameter("tex4_color_2", tex4_color_2)
+	terrain_material.set_shader_parameter("tex4_color_3", tex4_color_3)
+	terrain_material.set_shader_parameter("tex4_color_4", tex4_color_4)
+	terrain_material.set_shader_parameter("tex5_color_1", tex5_color_1)
+	terrain_material.set_shader_parameter("tex5_color_2", tex5_color_2)
+	terrain_material.set_shader_parameter("tex5_color_3", tex5_color_3)
+	terrain_material.set_shader_parameter("tex5_color_4", tex5_color_4)
+	terrain_material.set_shader_parameter("tex6_color_1", tex6_color_1)
+	terrain_material.set_shader_parameter("tex6_color_2", tex6_color_2)
+	terrain_material.set_shader_parameter("tex6_color_3", tex6_color_3)
+	terrain_material.set_shader_parameter("tex6_color_4", tex6_color_4)
 	
 	# TERRAIN MATERIAL - Per-Texture UV Scales
 	terrain_material.set_shader_parameter("tex_scale_1", texture_scale_1)
@@ -820,13 +1008,31 @@ func force_batch_update() -> void:
 	grass_mat.set_shader_parameter("grass_texture_5", grass_sprite_tex_5)
 	grass_mat.set_shader_parameter("grass_texture_6", grass_sprite_tex_6)
 	
-	# GRASS MATERIAL - Grass Colors 
-	grass_mat.set_shader_parameter("grass_color_1", texture_albedo_1)
-	grass_mat.set_shader_parameter("grass_color_2", texture_albedo_2)
-	grass_mat.set_shader_parameter("grass_color_3", texture_albedo_3)
-	grass_mat.set_shader_parameter("grass_color_4", texture_albedo_4)
-	grass_mat.set_shader_parameter("grass_color_5", texture_albedo_5)
-	grass_mat.set_shader_parameter("grass_color_6", texture_albedo_6)
+	# GRASS MATERIAL - Grass Colors
+	grass_mat.set_shader_parameter("tex1_color_1", tex1_color_1)
+	grass_mat.set_shader_parameter("tex1_color_2", tex1_color_2)
+	grass_mat.set_shader_parameter("tex1_color_3", tex1_color_3)
+	grass_mat.set_shader_parameter("tex1_color_4", tex1_color_4)
+	grass_mat.set_shader_parameter("tex2_color_1", tex2_color_1)
+	grass_mat.set_shader_parameter("tex2_color_2", tex2_color_2)
+	grass_mat.set_shader_parameter("tex2_color_3", tex2_color_3)
+	grass_mat.set_shader_parameter("tex2_color_4", tex2_color_4)
+	grass_mat.set_shader_parameter("tex3_color_1", tex3_color_1)
+	grass_mat.set_shader_parameter("tex3_color_2", tex3_color_2)
+	grass_mat.set_shader_parameter("tex3_color_3", tex3_color_3)
+	grass_mat.set_shader_parameter("tex3_color_4", tex3_color_4)
+	grass_mat.set_shader_parameter("tex4_color_1", tex4_color_1)
+	grass_mat.set_shader_parameter("tex4_color_2", tex4_color_2)
+	grass_mat.set_shader_parameter("tex4_color_3", tex4_color_3)
+	grass_mat.set_shader_parameter("tex4_color_4", tex4_color_4)
+	grass_mat.set_shader_parameter("tex5_color_1", tex5_color_1)
+	grass_mat.set_shader_parameter("tex5_color_2", tex5_color_2)
+	grass_mat.set_shader_parameter("tex5_color_3", tex5_color_3)
+	grass_mat.set_shader_parameter("tex5_color_4", tex5_color_4)
+	grass_mat.set_shader_parameter("tex6_color_1", tex6_color_1)
+	grass_mat.set_shader_parameter("tex6_color_2", tex6_color_2)
+	grass_mat.set_shader_parameter("tex6_color_3", tex6_color_3)
+	grass_mat.set_shader_parameter("tex6_color_4", tex6_color_4)
 	
 	# GRASS MATERIAL - Use Base Color Flags 
 	grass_mat.set_shader_parameter("use_base_color_1", texture_1 == null)
@@ -842,6 +1048,21 @@ func force_batch_update() -> void:
 	grass_mat.set_shader_parameter("use_grass_tex_4", tex4_has_grass)
 	grass_mat.set_shader_parameter("use_grass_tex_5", tex5_has_grass)
 	grass_mat.set_shader_parameter("use_grass_tex_6", tex6_has_grass)
+	
+	# GRASS MATERIAL - Wind
+	grass_mat.set_shader_parameter("wind_mode", wind_mode)
+	grass_mat.set_shader_parameter("wind_intensity", wind_intensity)
+	grass_mat.set_shader_parameter("wind_tip_color", wind_tip_color)
+	grass_mat.set_shader_parameter("wind_tip_strength", wind_tip_strength)
+	
+	# GLOBAL NOISE - Dark-light Hues
+	terrain_material.set_shader_parameter("global_noise_scale", global_noise_scale)
+	terrain_material.set_shader_parameter("global_noise_strength", global_noise_strength)
+	grass_mat.set_shader_parameter("global_noise_scale", global_noise_scale)
+	grass_mat.set_shader_parameter("global_noise_strength", global_noise_strength)
+	grass_mat.set_shader_parameter("color_variation_scale", color_variation_scale)
+	grass_mat.set_shader_parameter("color_variation_strength", color_variation_strength)
+
 
 
 ## Syncs and saves current UI texture values to the given preset resource
@@ -893,13 +1114,13 @@ func save_to_preset() -> void:
 	current_texture_preset.new_textures.grass_sprites[4] = grass_sprite_tex_5
 	current_texture_preset.new_textures.grass_sprites[5] = grass_sprite_tex_6
 	
-	# Grass colors
-	current_texture_preset.new_textures.grass_colors[0] = texture_albedo_1
-	current_texture_preset.new_textures.grass_colors[1] = texture_albedo_2
-	current_texture_preset.new_textures.grass_colors[2] = texture_albedo_3
-	current_texture_preset.new_textures.grass_colors[3] = texture_albedo_4
-	current_texture_preset.new_textures.grass_colors[4] = texture_albedo_5
-	current_texture_preset.new_textures.grass_colors[5] = texture_albedo_6
+	# Grass colors (palette - 4 per slot)
+	current_texture_preset.new_textures.grass_colors[0] = tex1_color_1
+	current_texture_preset.new_textures.grass_colors[1] = tex2_color_1
+	current_texture_preset.new_textures.grass_colors[2] = tex3_color_1
+	current_texture_preset.new_textures.grass_colors[3] = tex4_color_1
+	current_texture_preset.new_textures.grass_colors[4] = tex5_color_1
+	current_texture_preset.new_textures.grass_colors[5] = tex6_color_1
 	
 	# Has grass flags
 	current_texture_preset.new_textures.has_grass[0] = tex2_has_grass
@@ -908,4 +1129,58 @@ func save_to_preset() -> void:
 	current_texture_preset.new_textures.has_grass[3] = tex5_has_grass
 	current_texture_preset.new_textures.has_grass[4] = tex6_has_grass
 
+# Creates a snapshot of your last Preset
+func save_to_preset_target(target: MarchingSquaresTexturePreset) -> void:
+	target.new_textures.grass_colors.resize(24)
+	target.new_textures.grass_colors[0]  = tex1_color_1; target.new_textures.grass_colors[1]  = tex1_color_2
+	target.new_textures.grass_colors[2]  = tex1_color_3; target.new_textures.grass_colors[3]  = tex1_color_4
+	target.new_textures.grass_colors[4]  = tex2_color_1; target.new_textures.grass_colors[5]  = tex2_color_2
+	target.new_textures.grass_colors[6]  = tex2_color_3; target.new_textures.grass_colors[7]  = tex2_color_4
+	target.new_textures.grass_colors[8]  = tex3_color_1; target.new_textures.grass_colors[9]  = tex3_color_2
+	target.new_textures.grass_colors[10] = tex3_color_3; target.new_textures.grass_colors[11] = tex3_color_4
+	target.new_textures.grass_colors[12] = tex4_color_1; target.new_textures.grass_colors[13] = tex4_color_2
+	target.new_textures.grass_colors[14] = tex4_color_3; target.new_textures.grass_colors[15] = tex4_color_4
+	target.new_textures.grass_colors[16] = tex5_color_1; target.new_textures.grass_colors[17] = tex5_color_2
+	target.new_textures.grass_colors[18] = tex5_color_3; target.new_textures.grass_colors[19] = tex5_color_4
+	target.new_textures.grass_colors[20] = tex6_color_1; target.new_textures.grass_colors[21] = tex6_color_2
+	target.new_textures.grass_colors[22] = tex6_color_3; target.new_textures.grass_colors[23] = tex6_color_4
+	target.new_textures.terrain_textures[6] = texture_7
+	target.new_textures.terrain_textures[7] = texture_8
+	target.new_textures.terrain_textures[8] = texture_9
+	target.new_textures.terrain_textures[9] = texture_10
+	target.new_textures.terrain_textures[10] = texture_11
+	target.new_textures.terrain_textures[11] = texture_12
+	target.new_textures.terrain_textures[12] = texture_13
+	target.new_textures.terrain_textures[13] = texture_14
+	target.new_textures.terrain_textures[14] = texture_15
+	target.new_textures.terrain_textures[0] = texture_1
+	target.new_textures.terrain_textures[1] = texture_2 
+	target.new_textures.terrain_textures[2] = texture_3 
+	target.new_textures.terrain_textures[3] = texture_4  
+	target.new_textures.terrain_textures[4] = texture_5 
+	target.new_textures.terrain_textures[5] = texture_6  
+	target.new_textures.terrain_textures[6] = texture_7
+	target.new_textures.texture_scales[7] = texture_scale_8
+	target.new_textures.texture_scales[8] = texture_scale_9
+	target.new_textures.texture_scales[9] = texture_scale_10
+	target.new_textures.texture_scales[10] = texture_scale_11
+	target.new_textures.texture_scales[11] = texture_scale_12
+	target.new_textures.texture_scales[12] = texture_scale_13
+	target.new_textures.texture_scales[13] = texture_scale_14
+	target.new_textures.texture_scales[14] = texture_scale_15
+	target.new_textures.grass_sprites[0] = grass_sprite_tex_1
+	target.new_textures.grass_sprites[1] = grass_sprite_tex_2
+	target.new_textures.grass_sprites[2] = grass_sprite_tex_3
+	target.new_textures.grass_sprites[3] = grass_sprite_tex_4
+	target.new_textures.grass_sprites[4] = grass_sprite_tex_5
+	target.new_textures.grass_sprites[5] = grass_sprite_tex_6
+	target.new_textures.has_grass[0] = tex2_has_grass
+	target.new_textures.has_grass[1] = tex3_has_grass
+	target.new_textures.has_grass[2] = tex4_has_grass
+	target.new_textures.has_grass[3] = tex5_has_grass
+	target.new_textures.has_grass[4] = tex6_has_grass
+	if texture_names.size() > 0:
+		if target.new_tex_names == null:
+			target.new_tex_names = MarchingSquaresTextureNames.new()
+		target.new_tex_names.texture_names = texture_names.duplicate()
 #endregion

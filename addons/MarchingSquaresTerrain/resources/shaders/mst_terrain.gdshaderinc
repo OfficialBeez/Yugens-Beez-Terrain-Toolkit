@@ -5,12 +5,30 @@ uniform float wall_threshold : hint_range(0.0, 0.5) = 0.0; // Experimental featu
 group_uniforms;
 
 group_uniforms Visuals.Albedo;
-uniform vec4 tex_albedo_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
-uniform vec4 tex_albedo_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
-uniform vec4 tex_albedo_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
-uniform vec4 tex_albedo_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
-uniform vec4 tex_albedo_5 : source_color = vec4(0.29, 0.494, 0.365, 1.0);
-uniform vec4 tex_albedo_6 : source_color = vec4(0.443, 0.447, 0.365, 1.0);
+uniform vec4 tex1_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
+uniform vec4 tex1_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
+uniform vec4 tex1_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
+uniform vec4 tex1_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
+uniform vec4 tex2_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
+uniform vec4 tex2_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
+uniform vec4 tex2_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
+uniform vec4 tex2_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
+uniform vec4 tex3_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
+uniform vec4 tex3_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
+uniform vec4 tex3_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
+uniform vec4 tex3_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
+uniform vec4 tex4_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
+uniform vec4 tex4_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
+uniform vec4 tex4_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
+uniform vec4 tex4_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
+uniform vec4 tex5_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
+uniform vec4 tex5_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
+uniform vec4 tex5_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
+uniform vec4 tex5_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
+uniform vec4 tex6_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
+uniform vec4 tex6_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
+uniform vec4 tex6_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
+uniform vec4 tex6_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
 group_uniforms;
 
 group_uniforms Visuals.Vertex_Painting;
@@ -73,6 +91,8 @@ uniform float ledge_threshold : hint_range(0.0, 1.0) = 1.0;
 uniform sampler2D rl_noise_texture : source_color, filter_nearest;
 uniform float rl_noise_tile_size : hint_range(0.01, 1.0) = 0.075;
 uniform float rl_noise_strength : hint_range(0.0, 10.0) = 10.0;
+uniform float global_noise_scale = 0.08;
+uniform float global_noise_strength = 0.3;
 group_uniforms;
 
 group_uniforms Effects.Hanging_Floor_Texture;
@@ -124,6 +144,18 @@ float noise(vec2 p) {
 	float c = hash(i + vec2(0.0, 1.0));
 	float d = hash(i + vec2(1.0, 1.0));
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+	float value = 0.0;
+	float amplitude = 0.5;
+	float frequency = 1.0;
+	for (int i = 0; i < 5; i++) {
+		value += amplitude * noise(p * frequency);
+		frequency *= 2.0;
+		amplitude *= 0.5;
+	}
+	return value;
 }
 
 // Original: Get material index from vertex colors (used in vertex shader for hard edges)
@@ -178,20 +210,40 @@ float get_texture_scale(int index) {
 	}
 }
 
+vec4 get_palette_color(int tex_idx, vec2 world_xz) {
+	float n = fbm(vec2(
+		world_xz.x * 0.08 + world_xz.y * 0.031 + world_pos.y * 0.02,
+		world_xz.y * 0.08 - world_xz.x * 0.023 + world_pos.y * 0.7));
+	n = smoothstep(0.0, 1.0, n);
+
+	vec4 c1, c2, c3, c4;
+	if (tex_idx == 0)      { c1=tex1_color_1; c2=tex1_color_2; c3=tex1_color_3; c4=tex1_color_4; }
+	else if (tex_idx == 1) { c1=tex2_color_1; c2=tex2_color_2; c3=tex2_color_3; c4=tex2_color_4; }
+	else if (tex_idx == 2) { c1=tex3_color_1; c2=tex3_color_2; c3=tex3_color_3; c4=tex3_color_4; }
+	else if (tex_idx == 3) { c1=tex4_color_1; c2=tex4_color_2; c3=tex4_color_3; c4=tex4_color_4; }
+	else if (tex_idx == 4) { c1=tex5_color_1; c2=tex5_color_2; c3=tex5_color_3; c4=tex5_color_4; }
+	else                   { c1=tex6_color_1; c2=tex6_color_2; c3=tex6_color_3; c4=tex6_color_4; }
+
+	// c1=lightest at n=0, c4=darkest at n=1
+	if (n < 0.33)      return mix(c1, c2, smoothstep(0.0,  0.33, n));
+	else if (n < 0.66) return mix(c2, c3, smoothstep(0.33, 0.66, n));
+	else               return mix(c3, c4, smoothstep(0.66, 1.0,  n));
+}
+
 // Sample material by index with albedo tints and per-texture scaling applied
 vec4 sample_material_by_index(int index, vec2 base_uv) {
 	float scale = 1.0;
 	if (index != 15)
 		scale = get_texture_scale(index);
 	vec2 uv = base_uv * scale;
-	vec4 result;
+	vec4 result = vec4(1.0);
 	switch(index) {
-		case 0: result = texture(vc_tex_rr, uv) * tex_albedo_1; break;
-		case 1: result = texture(vc_tex_rg, uv) * tex_albedo_2; break;
-		case 2: result = texture(vc_tex_rb, uv) * tex_albedo_3; break;
-		case 3: result = texture(vc_tex_ra, uv) * tex_albedo_4; break;
-		case 4: result = texture(vc_tex_gr, uv) * tex_albedo_5; break;
-		case 5: result = texture(vc_tex_gg, uv) * tex_albedo_6; break;
+		case 0: result = texture(vc_tex_rr, uv) * get_palette_color(0, world_pos.xz); break;
+		case 1: result = texture(vc_tex_rg, uv) * get_palette_color(1, world_pos.xz); break;
+		case 2: result = texture(vc_tex_rb, uv) * get_palette_color(2, world_pos.xz); break;
+		case 3: result = texture(vc_tex_ra, uv) * get_palette_color(3, world_pos.xz); break;
+		case 4: result = texture(vc_tex_gr, uv) * get_palette_color(4, world_pos.xz); break;
+		case 5: result = texture(vc_tex_gg, uv) * get_palette_color(5, world_pos.xz); break;
 		case 6: result = texture(vc_tex_gb, uv); break;
 		case 7: result = texture(vc_tex_ga, uv); break;
 		case 8: result = texture(vc_tex_br, uv); break;
@@ -202,7 +254,7 @@ vec4 sample_material_by_index(int index, vec2 base_uv) {
 		case 13: result = texture(vc_tex_ag, uv); break;
 		case 14: result = texture(vc_tex_ab, uv); break;
 		case 15: result = texture(vc_tex_aa, uv); break;  // VOID: fully transparent, no color contribution to blending
-		default: result = texture(vc_tex_rr, uv) * tex_albedo_1; break;
+		default: result = texture(vc_tex_rr, uv) * tex1_color_1; break;
 	}
 	return result;
 }
@@ -355,7 +407,6 @@ void fragment() {
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 #ifndef BAKE_MODE
 	vec4 vertex_pos = INV_VIEW_MATRIX * vec4(VERTEX, 1.0);
-	vec3 v = VERTEX;
 #else
 	vec4 vertex_pos = INV_VIEW_MATRIX * vec4(virtual_vertex, 1.0);
 #endif
@@ -523,6 +574,16 @@ void fragment() {
 		vec3 rl_wall_color_z = sample_material_by_index(int(nearest_wall_color_idx), (UV2) * tiling_factor_wall).rgb * tri_weights.z;
 		mixed_triplanar_color = mix(floor_color.rgb, rl_wall_color_x + rl_wall_color_z, mixed_blend_factor);
 		ALBEDO = mixed_triplanar_color;
+	}
+
+	// Global brightness variation noise - runs on ALL floor pixels
+	if (is_floor && global_noise_strength > 0.0) {
+		float gn = fbm(vec2(
+			vertex_pos.x * global_noise_scale + vertex_pos.z * 0.031,
+			vertex_pos.z * global_noise_scale - vertex_pos.x * 0.023));
+		gn = smoothstep(0.0, 1.0, gn);
+		float brightness = mix(1.0 - global_noise_strength, 1.0 + (global_noise_strength * 0.5), gn);
+		ALBEDO *= brightness;
 	}
 }
 

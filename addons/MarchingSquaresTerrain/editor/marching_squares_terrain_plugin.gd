@@ -67,8 +67,8 @@ var mode : TerrainToolMode = TerrainToolMode.BRUSH:
 		mode = value
 		current_draw_pattern.clear()
 		if mode in [TerrainToolMode.VERTEX_PAINTING]:
-			falloff = false
-			BRUSH_RADIUS_MATERIAL.set_shader_parameter("falloff_visible", false)
+			falloff = true
+			BRUSH_RADIUS_MATERIAL.set_shader_parameter("falloff_visible", true)
 #endregion
 
 #region tool attribute vars
@@ -127,6 +127,9 @@ var draw_height : float
 
 # Is set to true when the user clicks on a tile that is part of the current draw pattern, will enter heightdrag setting mode
 var is_setting : bool
+
+# Variable for keeping the brush tool static when restarting the plugin
+var _is_reselecting: bool = false
 
 var is_making_bridge : bool
 var bridge_start_pos : Vector3
@@ -187,12 +190,21 @@ func _safe_initialize() -> bool:
 		initialization_error = "Failed to load algorithm scripts"
 		return false
 	
-	if gizmo_plugin:
-		add_node_3d_gizmo_plugin(gizmo_plugin)
-	else:
-		initialization_error = "Failed to create gizmo plugin"
-		return false
+	if not gizmo_plugin:
+		gizmo_plugin = MarchingSquaresTerrainGizmoPlugin.new()
 	
+	# Clear stale/detached gizmo instances from before restart
+	gizmo_plugin._terrain_gizmos.clear()
+	gizmo_plugin._chunk_gizmos.clear()
+	
+	add_node_3d_gizmo_plugin(gizmo_plugin)
+	
+	
+	if not is_instance_valid(toolbar):
+		toolbar = MarchingSquaresToolbar.new()
+	if not is_instance_valid(tool_attributes):
+		tool_attributes = MarchingSquaresToolAttributes.new()
+
 	if not ui:
 		ui = UI.new()
 		if ui:
@@ -201,8 +213,9 @@ func _safe_initialize() -> bool:
 		else:
 			initialization_error = "Failed to create UI system"
 			return false
-	
+
 	is_initialized = true
+	call_deferred("_refresh_editor_state")
 	return true
 
 
@@ -215,12 +228,24 @@ func _exit_tree():
 	remove_custom_type("MarchingSquaresTerrainChunk")
 	
 	if gizmo_plugin:
+		gizmo_plugin._terrain_gizmos.clear()
+		gizmo_plugin._chunk_gizmos.clear()
 		remove_node_3d_gizmo_plugin(gizmo_plugin)
-		gizmo_plugin = null
 	
 	is_initialized = false
 	initialization_error = ""
 
+
+func _refresh_editor_state() -> void:
+	# Re-arm gizmos and _edit() for any currently-selected/edited terrain
+	var root := EditorInterface.get_edited_scene_root()
+	if not root:
+		return
+	for node in root.find_children("", "Node3D", true, false):
+		if node is MarchingSquaresTerrain or node is MarchingSquaresTerrainChunk:
+			node.update_gizmos()
+			if node is MarchingSquaresTerrain and node in EditorInterface.get_selection().get_selected_nodes():
+				EditorInterface.edit_node(node)
 
 func _ready():
 	BRUSH_RADIUS_MATERIAL.set_shader_parameter("falloff_visible", falloff)
@@ -275,12 +300,13 @@ func _edit(object: Object) -> void:
 			current_texture_preset = object.current_texture_preset
 			_syncing_from_terrain = false
 	else:
-		if ui:
-			ui.set_visible(false)
-		current_draw_pattern.clear()
-		is_drawing = false
-		draw_height_set = false
-		gizmo_plugin.clear()
+		if not _is_reselecting:
+			if ui:
+				ui.set_visible(false)
+			current_draw_pattern.clear()
+			is_drawing = false
+			draw_height_set = false
+			gizmo_plugin.clear()
 
 
 # This function handles the mouse click in the 3D viewport
@@ -411,10 +437,10 @@ func handle_mouse(camera: Camera3D, event: InputEvent) -> int:
 					is_making_bridge = false
 				if is_drawing:
 					is_drawing = false
-					if mode in [TerrainToolMode.GRASS_MASK, TerrainToolMode.LEVEL, TerrainToolMode.BRIDGE, TerrainToolMode.DEBUG_BRUSH]:
+					if mode in [TerrainToolMode.GRASS_MASK, TerrainToolMode.LEVEL, TerrainToolMode.BRIDGE, TerrainToolMode.DEBUG_BRUSH, TerrainToolMode.VERTEX_PAINTING]:
 						draw_pattern(terrain)
 						current_draw_pattern.clear()
-					if mode in [TerrainToolMode.SMOOTH, TerrainToolMode.VERTEX_PAINTING]:
+					if mode in [TerrainToolMode.SMOOTH]:
 						current_draw_pattern.clear()
 				if is_setting:
 					is_setting = false
@@ -448,7 +474,7 @@ func handle_mouse(camera: Camera3D, event: InputEvent) -> int:
 		
 		if draw_area_hovered and event is InputEventMouseMotion:
 			brush_position = draw_position
-			if is_drawing and mode in [TerrainToolMode.SMOOTH, TerrainToolMode.VERTEX_PAINTING, TerrainToolMode.GRASS_MASK]:
+			if is_drawing and mode in [TerrainToolMode.SMOOTH, TerrainToolMode.GRASS_MASK]:
 				draw_pattern(terrain)
 				current_draw_pattern.clear()
 		
@@ -667,8 +693,10 @@ func draw_pattern(terrain: MarchingSquaresTerrain):
 				else:
 					restore_value = chunk.get_color_0(draw_cell_coords)
 					restore_value_cc = chunk.get_color_1(draw_cell_coords)
-				draw_value = vertex_color_0
-				draw_value_cc = vertex_color_1
+				
+				var t := clamp(sample * strength, 0.0, 1.0)
+				draw_value = restore_value.lerp(vertex_color_0, t)
+				draw_value_cc = restore_value_cc.lerp(vertex_color_1, t)
 			elif mode == TerrainToolMode.DEBUG_BRUSH:
 				var g_pos := chunk.to_global(Vector3(float(draw_cell_coords.x), chunk.get_height(draw_cell_coords), float(draw_cell_coords.y)))
 				var normal := get_cell_normal(chunk, draw_cell_coords)
@@ -1196,6 +1224,8 @@ func _set_new_textures(_preset: MarchingSquaresTexturePreset) -> void:
 			0: # terrain_textures (unified for both floor and wall painting)
 				for i_tex in range(_preset.new_textures.terrain_textures.size()):
 					var tex : Texture2D = _preset.new_textures.terrain_textures[i_tex]
+					if tex == null:
+						continue
 					match i_tex:
 						0:
 							current_terrain_node.texture_1 = tex
@@ -1280,23 +1310,27 @@ func _set_new_textures(_preset: MarchingSquaresTexturePreset) -> void:
 						5:
 							current_terrain_node.grass_sprite_tex_6 = tex
 			3: # grass_colors
-				for i_grass_col in range(_preset.new_textures.grass_colors.size()):
-					var col : Color = _preset.new_textures.grass_colors[i_grass_col]
-					if col == null:
-						continue
-					match i_grass_col:
-						0:
-							current_terrain_node.texture_albedo_1 = col
-						1:
-							current_terrain_node.texture_albedo_2 = col
-						2:
-							current_terrain_node.texture_albedo_3 = col
-						3:
-							current_terrain_node.texture_albedo_4 = col
-						4:
-							current_terrain_node.texture_albedo_5 = col
-						5:
-							current_terrain_node.texture_albedo_6 = col
+				var c := _preset.new_textures.grass_colors
+				if c.size() >= 24:
+					current_terrain_node.tex1_color_1 = c[0];  current_terrain_node.tex1_color_2 = c[1]
+					current_terrain_node.tex1_color_3 = c[2];  current_terrain_node.tex1_color_4 = c[3]
+					current_terrain_node.tex2_color_1 = c[4];  current_terrain_node.tex2_color_2 = c[5]
+					current_terrain_node.tex2_color_3 = c[6];  current_terrain_node.tex2_color_4 = c[7]
+					current_terrain_node.tex3_color_1 = c[8];  current_terrain_node.tex3_color_2 = c[9]
+					current_terrain_node.tex3_color_3 = c[10]; current_terrain_node.tex3_color_4 = c[11]
+					current_terrain_node.tex4_color_1 = c[12]; current_terrain_node.tex4_color_2 = c[13]
+					current_terrain_node.tex4_color_3 = c[14]; current_terrain_node.tex4_color_4 = c[15]
+					current_terrain_node.tex5_color_1 = c[16]; current_terrain_node.tex5_color_2 = c[17]
+					current_terrain_node.tex5_color_3 = c[18]; current_terrain_node.tex5_color_4 = c[19]
+					current_terrain_node.tex6_color_1 = c[20]; current_terrain_node.tex6_color_2 = c[21]
+					current_terrain_node.tex6_color_3 = c[22]; current_terrain_node.tex6_color_4 = c[23]
+				elif c.size() >= 6: # legacy preset with 6 colors — map to color_1 slots only
+					current_terrain_node.tex1_color_1 = c[0]
+					current_terrain_node.tex2_color_1 = c[1]
+					current_terrain_node.tex3_color_1 = c[2]
+					current_terrain_node.tex4_color_1 = c[3]
+					current_terrain_node.tex5_color_1 = c[4]
+					current_terrain_node.tex6_color_1 = c[5]
 			4: # has_grass
 				for i_has_grass in range(_preset.new_textures.has_grass.size()):
 					var val : bool = _preset.new_textures.has_grass[i_has_grass]
@@ -1312,7 +1346,6 @@ func _set_new_textures(_preset: MarchingSquaresTexturePreset) -> void:
 						4:
 							current_terrain_node.tex6_has_grass = val
 	
-	vp_texture_names.texture_names = _preset.new_tex_names.texture_names
 	
 	# Apply a batch update
 	current_terrain_node.force_batch_update()

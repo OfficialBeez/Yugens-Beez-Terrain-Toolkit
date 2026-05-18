@@ -3,9 +3,8 @@
 [ext_resource type="Script" uid="uid://dqeuj3gddfm65" path="res://addons/MarchingSquaresTerrain/editor/tools/scripts/marching_squares_texture_names.gd" id="1_2ytvk"]
 [ext_resource type="Texture2D" uid="uid://cxvnfgy865wsk" path="res://addons/MarchingSquaresTerrain/resources/plugin_materials/grass_leaf_sprite.png" id="2_mj53h"]
 [ext_resource type="Script" uid="uid://c5yuywww81uee" path="res://addons/MarchingSquaresTerrain/editor/tools/scripts/marching_squares_texture_list.gd" id="3_8t6fg"]
-[ext_resource type="Texture2D" uid="uid://dbnc04k3n0sro" path="res://addons/MarchingSquaresTerrain/resources/plugin_materials/grass_terrain_noise.res" id="4_74r6l"]
 [ext_resource type="Script" uid="uid://mtlf02qfkqp5" path="res://addons/MarchingSquaresTerrain/editor/tools/scripts/marching_squares_quick_paint.gd" id="5_bfkh4"]
-[ext_resource type="Script" path="res://addons/MarchingSquaresTerrain/editor/tools/scripts/marching_squares_texture_preset.gd" id="6_0gudh"]
+[ext_resource type="Script" uid="uid://fvb3vi413siv" path="res://addons/MarchingSquaresTerrain/editor/tools/scripts/marching_squares_texture_preset.gd" id="6_0gudh"]
 [ext_resource type="Resource" uid="uid://dl17nobgpd02j" path="res://addons/MarchingSquaresTerrain/resources/quick_paints/example_snow_paint.tres" id="6_2ytvk"]
 
 [sub_resource type="Resource" id="Resource_wm3h7"]
@@ -13,47 +12,13 @@ script = ExtResource("1_2ytvk")
 texture_names = Array[String](["Base Grass", "Texture 2 (g)", "Texture 3 (g)", "Texture 4 (g)", "Blue Ice", "Snow", "Texture 7", "Texture 8", "Texture 9", "Texture 10", "Texture 11", "Texture 12", "Texture 13", "Texture 14", "Texture 15", "Void"])
 metadata/_custom_type_script = "uid://dqeuj3gddfm65"
 
-[sub_resource type="Texture2D" id="Texture2D_vynns"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_p1dug"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_38l2j"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_ta716"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_1nue7"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_iuhot"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_vk8tc"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_11ep3"]
-resource_local_to_scene = false
-resource_name = ""
-
-[sub_resource type="Texture2D" id="Texture2D_fpfsv"]
-resource_local_to_scene = false
-resource_name = ""
+[sub_resource type="CompressedTexture2D" id="CompressedTexture2D_0lcs3"]
+load_path = "res://.godot/imported/grass_leaf_sprite.png-019dffb0f5761dc01ab007d69d2f79d3.s3tc.ctex"
 
 [sub_resource type="Resource" id="Resource_0suar"]
 script = ExtResource("3_8t6fg")
-terrain_textures = Array[Texture2D]([ExtResource("4_74r6l"), ExtResource("4_74r6l"), ExtResource("4_74r6l"), ExtResource("4_74r6l"), ExtResource("4_74r6l"), null, SubResource("Texture2D_vynns"), SubResource("Texture2D_p1dug"), SubResource("Texture2D_38l2j"), SubResource("Texture2D_ta716"), SubResource("Texture2D_1nue7"), SubResource("Texture2D_iuhot"), SubResource("Texture2D_vk8tc"), SubResource("Texture2D_11ep3"), SubResource("Texture2D_fpfsv")])
-texture_scales = Array[float]([1.0, 1.0, 1.0, 1.0, 5.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-grass_colors = Array[Color]([Color(0.65882355, 0.9411765, 0.972549, 1), Color(0.27058825, 0.5529412, 0.8745098, 1), Color(0.11764706, 0.34117648, 0.5882353, 1), Color(0.07058824, 0.24313726, 0.42745098, 1), Color(0.20784314, 0.73333335, 0.8666667, 1), Color(1, 1, 1, 1)])
+grass_sprites = Array[Texture2D]([ExtResource("2_mj53h"), ExtResource("2_mj53h"), ExtResource("2_mj53h"), ExtResource("2_mj53h"), ExtResource("2_mj53h"), SubResource("CompressedTexture2D_0lcs3")])
+grass_colors = Array[Color]([Color(0.23529412, 0.31764707, 0.85882354, 1), Color(0.20784314, 0.73333335, 0.8666667, 1), Color(0.42352942, 0.627451, 0.79607844, 1), Color(0.60784316, 0.5764706, 0.89411765, 1), Color(0.44705883, 0.76862746, 0.6745098, 1), Color(0.42352942, 0.69411767, 0.6862745, 1), Color(0.08235294, 0.67058825, 1, 1), Color(0, 0.6862745, 0.9411765, 1), Color(0.42352942, 0.87058824, 0.79607844, 1), Color(0.35686275, 0.38039216, 0.9098039, 1), Color(0, 0.6156863, 0.99607843, 1), Color(0.20784314, 0.7411765, 0.98039216, 1), Color(0.60784316, 0.5764706, 0.89411765, 1), Color(0.09019608, 0.7294118, 0.91764706, 1), Color(0.3019608, 0.101960786, 0.9529412, 1), Color(0.19607843, 0.8666667, 0.972549, 1), Color(0.44705883, 0.76862746, 0.6745098, 1), Color(0.31764707, 0.7490196, 0.9843137, 1), Color(0.38431373, 0.8392157, 0.7137255, 1), Color(0.47058824, 0.70980394, 0.84313726, 1), Color(0.42352942, 0.69411767, 0.6862745, 1), Color(0.32667717, 0.65583557, 0.71510637, 1), Color(0.63529414, 0.9098039, 0.9137255, 1), Color(0.70980394, 0.8392157, 0.92941177, 1)])
 has_grass = Array[bool]([true, true, true, false, false])
 
 [resource]

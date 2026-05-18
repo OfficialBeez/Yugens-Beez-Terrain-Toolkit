@@ -69,7 +69,7 @@ var material : Dictionary = {
 	"name": "material",
 	"type": "option",
 	"label": "Material",
-	"options": vp_tex_names.texture_names,
+	"options": [], # Dynamically write them now!
 	"default": 0,
 }
 

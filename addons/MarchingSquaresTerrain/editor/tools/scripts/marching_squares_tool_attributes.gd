@@ -21,26 +21,37 @@ enum SettingType {
 	ERROR,
 }
 
+# Add/move settings between groups freely — the UI updates automatically.
 var terrain_settings_data : Dictionary = {
-	"dimensions": "Vector3i",
-	"cell_size": "Vector2",
-	"blend_mode": "OptionButton",
-	"noise_hmap": "EditorResourcePicker",
-	"default_wall_texture": "OptionButton",
-	"extra_collision_layer": "OptionButton",
-	# Grass settings
-	"animation_fps": "SpinBox",
-	"grass_subdivisions": "SpinBox",
-	"grass_size": "Vector2",
-	# Normal settings
-	"use_flat_normals": "CheckBox",
-	# Special texture settings
-	"use_ridge_texture": "CheckBox",
-	"use_ledge_texture": "CheckBox",
-	"ridge_threshold": "EditorSpinSlider",
-	"ledge_threshold": "EditorSpinSlider",
-	# Lighting settings
-	"use_cell_shading": "CheckBox",
+	"Chunk Settings": {
+		"dimensions": "Vector3i",
+		"cell_size": "Vector2",
+		"blend_mode": "OptionButton",
+		"extra_collision_layer": "OptionButton",
+		"noise_hmap": "EditorResourcePicker",
+		"global_noise_scale": "EditorSpinSlider",
+		"global_noise_strength": "EditorSpinSlider",
+	},
+	"Vertex Painter Settings": {
+		"default_wall_texture": "OptionButton",
+		"use_ridge_texture": "CheckBox",
+		"use_ledge_texture": "CheckBox",
+		"ridge_threshold": "EditorSpinSlider",
+		"ledge_threshold": "EditorSpinSlider",
+		"wall_threshold": "EditorSpinSlider",
+		"use_flat_normals": "CheckBox",
+		"use_cell_shading": "CheckBox",
+	},
+	"Grass Settings": {
+		"grass_subdivisions": "SpinBox",
+		"grass_size": "Vector2",
+		"grass_size_variation": "EditorSpinSlider",
+		"animation_fps": "SpinBox",
+		"wind_mode": "OptionButton",
+		"wind_intensity": "EditorSpinSlider",
+		"wind_tip_color": "ColorPickerButton",
+		"wind_tip_strength": "EditorSpinSlider",
+	},
 }
 
 var plugin : MarchingSquaresTerrainPlugin
@@ -126,6 +137,14 @@ func show_tool_attributes(tool_index: int) -> void:
 		new_attributes.append(attribute_list.quick_paint_selection)
 	if tool_attributes.paint_walls:
 		new_attributes.append(attribute_list.paint_walls)
+	
+	# Rebuild material names from the live terrain node
+	var terrain_names : Array = []
+	if plugin.current_terrain_node and plugin.current_terrain_node.texture_names.size() > 0:
+		terrain_names = plugin.current_terrain_node.texture_names
+	else:
+		terrain_names = attribute_list.vp_tex_names.texture_names  # fallback
+	attribute_list.material["options"] = terrain_names
 	
 	for attribute in new_attributes:
 		var setting_dict : Dictionary = attribute
@@ -299,7 +318,7 @@ func add_setting(p_params: Dictionary) -> void:
 				cont.add_child(preset_button, true)
 				hbox_container.add_child(cont, true)
 			else: # Can be used for e.g. terrain settings presets in the future
-				pass 
+				pass
 		SettingType.QUICK_PAINT:
 			var quick_paint_button := OptionButton.new()
 			quick_paint_button.add_item("None")  # First option is no paint. #TODO Doesn't seem to work right now and needs to be fixed later.
@@ -407,187 +426,148 @@ func add_setting(p_params: Dictionary) -> void:
 			cont.add_child(mult_apply_button, true)
 			hbox_container.add_child(cont, true)
 		SettingType.TERRAIN:
-			var vbox := VBoxContainer.new()
-			for setting in terrain_settings_data:
-				var editor_setting = terrain_settings_data[setting]
-				var s_value := plugin.current_terrain_node.get(setting)
-				
-				var hbox := HBoxContainer.new()
-				
-				var label := Label.new()
-				label.set_text(_make_editor_name(setting) + ':')
-				label.set_vertical_alignment(VERTICAL_ALIGNMENT_CENTER)
-				label.set_custom_minimum_size(Vector2(50, 25))
-				
-				var label_c_cont := CenterContainer.new()
-				label_c_cont.set_custom_minimum_size(Vector2(50, 35))
-				label_c_cont.offset_right = 200
-				label_c_cont.add_child(label, true)
-				hbox.add_child(label_c_cont, true)
-				
-				var spacer := Control.new()
-				spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				hbox.add_child(spacer)
-				
-				var ts_cont : Control
-				match editor_setting:
-					"Vector2":
-						var editor_vec2 := _make_vector_editor(editor_setting, s_value, setting)
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(130, 35))
-						ts_cont.add_child(editor_vec2, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"Vector3i":
-						var editor_vec3i := _make_vector_editor(editor_setting, s_value, setting)
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(185, 35))
-						ts_cont.add_child(editor_vec3i, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"SpinBox":
-						var spin_box := SpinBox.new()
-						spin_box.value = plugin.current_terrain_node.get(setting)
-						spin_box.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
-						spin_box.set_custom_minimum_size(Vector2(25, 25))
-						
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(35, 35))
-						ts_cont.add_child(spin_box, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"EditorSpinSlider":
-						var spin_slider := EditorSpinSlider.new()
-						spin_slider.set_flat(true)
-						spin_slider.set_min(0.0)
-						if setting == "wall_threshold":
-							spin_slider.set_max(0.5)
-						else:
-							spin_slider.set_max(1.0)
-						spin_slider.set_step(0.01)
-						spin_slider.set_value(s_value)
-						spin_slider.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
-						spin_slider.set_custom_minimum_size(Vector2(105, 35))
-						
-						ts_cont = MarginContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(105, 35))
-						ts_cont.add_theme_constant_override("margin_top", -5)
-						ts_cont.add_child(spin_slider, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"EditorResourcePicker":
-						var editor_r_picker := EditorResourcePicker.new()
-						if setting == "noise_hmap":
-							editor_r_picker.set_base_type("Noise")
-						else:
-							editor_r_picker.set_base_type("Texture2D")
-						editor_r_picker.edited_resource = plugin.current_terrain_node.get(setting)
-						_hide_textures(editor_r_picker)
-						editor_r_picker.resource_changed.connect(func(resource): _on_terrain_setting_changed(setting, resource))
-						editor_r_picker.set_custom_minimum_size(Vector2(100, 25))
-						
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(110, 35))
-						ts_cont.add_child(editor_r_picker, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"ColorPickerButton":
-						var c_pick_button := ColorPickerButton.new()
-						c_pick_button.color = plugin.current_terrain_node.get(setting)
-						c_pick_button.color_changed.connect(func(color): _on_terrain_setting_changed(setting, color))
-						c_pick_button.set_custom_minimum_size(Vector2(105, 25))
-						
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(105, 35))
-						ts_cont.add_child(c_pick_button, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"CheckBox":
-						var checkbox := CheckBox.new()
-						checkbox.set_flat(true)
-						checkbox.button_pressed = plugin.current_terrain_node.get(setting)
-						checkbox.toggled.connect(func(pressed): _on_terrain_setting_changed(setting, pressed))
-						checkbox.set_custom_minimum_size(Vector2(25, 25))
-						
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(35, 35))
-						ts_cont.add_child(checkbox, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"OptionButton":
-						var option_button := OptionButton.new()
-						option_button.set_flat(true)
-						if setting == "default_wall_texture":
-							# Populate with texture names from the shared texture names resource
-							for tex_name in attribute_list.vp_tex_names.texture_names:
-								option_button.add_item(tex_name)
-						elif setting == "blend_mode":
-							option_button.add_item("Smoothed Triangles")
-							option_button.add_item("Hard Squares")
-							option_button.add_item("Hard Triangles")
-						elif setting == "extra_collision_layer":
-							for i in range(24):
-								option_button.add_item(str(i+9))
-						# Set current selection from terrain node
-						if setting == "extra_collision_layer":
-							option_button.selected = plugin.current_terrain_node.get(setting) - 9
-						else:
-							option_button.selected = plugin.current_terrain_node.get(setting)
-						option_button.item_selected.connect(func(index): _on_terrain_setting_changed(setting, index))
-						option_button.set_custom_minimum_size(Vector2(100, 35))
-						
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(100, 35))
-						ts_cont.add_child(option_button, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"LineEdit":
-						var line_edit := LineEdit.new()
-						line_edit.set_flat(true)
-						line_edit.text = str(plugin.current_terrain_node.get(setting))
-						line_edit.placeholder_text = "(auto - scene relative)"
-						line_edit.text_submitted.connect(func(new_text): _on_terrain_setting_changed(setting, new_text))
-						line_edit.set_custom_minimum_size(Vector2(200, 25))
-						
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(210, 35))
-						ts_cont.add_child(line_edit, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-					"FolderPicker":
-						var folder_hbox := HBoxContainer.new()
-						folder_hbox.add_theme_constant_override("separation", 4)
-						
-						var path_edit := LineEdit.new()
-						path_edit.set_flat(true)
-						path_edit.text = str(plugin.current_terrain_node.get(setting))
-						path_edit.placeholder_text = "(auto - scene relative)"
-						path_edit.text_submitted.connect(func(new_text): _on_terrain_setting_changed(setting, new_text))
-						path_edit.set_custom_minimum_size(Vector2(180, 25))
-						folder_hbox.add_child(path_edit, true)
-						
-						var browse_btn := Button.new()
-						browse_btn.text = "..."
-						browse_btn.tooltip_text = "Browse for folder"
-						browse_btn.set_custom_minimum_size(Vector2(30, 25))
-						browse_btn.pressed.connect(func(): _open_folder_dialog(setting, path_edit))
-						folder_hbox.add_child(browse_btn, true)
-						
-						ts_cont = CenterContainer.new()
-						ts_cont.set_custom_minimum_size(Vector2(220, 35))
-						ts_cont.add_child(folder_hbox, true)
-						hbox.add_child(ts_cont, true)
-						vbox.add_child(hbox, true)
-				if vbox.get_child_count() % 3 == 0:
-					hbox_container.add_child(vbox)
-					hbox_container.add_child(VSeparator.new())
-					vbox = VBoxContainer.new()
-			if vbox.get_child_count() > 0:
-				hbox_container.add_child(vbox)
-		SettingType.ERROR: # Fallback
-			push_error("Couldn't load tool attributes setting")
-	
-	last_setting_type = setting_type
+			# Build one FoldableContainer per group, laid out horizontally
+			for group_name in terrain_settings_data.keys():
+				var group_settings : Dictionary = terrain_settings_data[group_name]
+
+				var fold := FoldableContainer.new()
+				fold.title = group_name
+				fold.folded = true # start collapsed for a clean default
+				fold.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+
+				# Inner scroll lets a single tall group scroll vertically if needed
+				var inner_scroll := ScrollContainer.new()
+				inner_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+				inner_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+				inner_scroll.set_custom_minimum_size(Vector2(260, 140))   # was Vector2(260, 0)
+				inner_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+				fold.add_child(inner_scroll)
+
+				var vbox := VBoxContainer.new()
+				vbox.add_theme_constant_override("separation", 4)
+				vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				inner_scroll.add_child(vbox)
+
+				for setting in group_settings.keys():
+					vbox.add_child(_make_terrain_setting_row(setting, group_settings[setting]))
+
+				hbox_container.add_child(fold)
+				hbox_container.add_child(VSeparator.new())
+
+
+func _make_terrain_setting_row(setting: String, editor_setting: String) -> HBoxContainer:
+	var s_value = plugin.current_terrain_node.get(setting)
+
+	var hbox := HBoxContainer.new()
+	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+	var label := Label.new()
+	label.text = _make_editor_name(setting) + ":"
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.set_custom_minimum_size(Vector2(110, 25))
+	hbox.add_child(label)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hbox.add_child(spacer)
+
+	var editor : Control = _make_terrain_setting_editor(setting, editor_setting, s_value)
+	if editor:
+		hbox.add_child(editor)
+	return hbox
+
+
+func _make_terrain_setting_editor(setting: String, editor_setting: String, s_value) -> Control:
+	match editor_setting:
+		"Vector2", "Vector3i":
+			return _make_vector_editor(editor_setting, s_value, setting)
+		"SpinBox":
+			var spin_box := SpinBox.new()
+			spin_box.value = s_value
+			spin_box.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
+			spin_box.set_custom_minimum_size(Vector2(80, 25))
+			return spin_box
+		"EditorSpinSlider":
+			var spin_slider := EditorSpinSlider.new()
+			spin_slider.set_flat(true)
+			spin_slider.set_min(0.005)
+			spin_slider.set_max(0.5 if setting == "wall_threshold" else 1.0)
+			spin_slider.set_step(0.01)
+			spin_slider.set_value(s_value if s_value != null else 0.0)
+			spin_slider.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
+			spin_slider.set_custom_minimum_size(Vector2(120, 25))
+			return spin_slider
+		"EditorResourcePicker":
+			var picker := EditorResourcePicker.new()
+			picker.set_base_type("Noise" if setting == "noise_hmap" else "Texture2D")
+			picker.edited_resource = s_value
+			_hide_textures(picker)
+			picker.resource_changed.connect(func(resource): _on_terrain_setting_changed(setting, resource))
+			picker.set_custom_minimum_size(Vector2(120, 25))
+			return picker
+		"ColorPickerButton":
+			var c_pick := ColorPickerButton.new()
+			c_pick.color = s_value
+			c_pick.color_changed.connect(func(color): _on_terrain_setting_changed(setting, color))
+			c_pick.set_custom_minimum_size(Vector2(120, 25))
+			return c_pick
+		"CheckBox":
+			var checkbox := CheckBox.new()
+			checkbox.set_flat(true)
+			checkbox.button_pressed = s_value
+			checkbox.toggled.connect(func(pressed): _on_terrain_setting_changed(setting, pressed))
+			return checkbox
+		"OptionButton":
+			var option_button := OptionButton.new()
+			option_button.set_flat(true)
+			if setting == "default_wall_texture":
+				for tex_name in attribute_list.vp_tex_names.texture_names:
+					option_button.add_item(tex_name)
+				option_button.selected = s_value
+			elif setting == "blend_mode":
+				option_button.add_item("Smoothed Triangles")
+				option_button.add_item("Hard Squares")
+				option_button.add_item("Hard Triangles")
+				option_button.selected = s_value
+			elif setting == "extra_collision_layer":
+				for i in range(24):
+					option_button.add_item(str(i + 9))
+				option_button.selected = s_value - 9
+			elif setting == "wind_mode":
+				option_button.add_item("Smooth")
+				option_button.add_item("Gust")
+				option_button.add_item("Pulse")
+				option_button.add_item("Turbulence")
+				option_button.selected = s_value
+			else:
+				option_button.selected = s_value
+			option_button.item_selected.connect(func(index): _on_terrain_setting_changed(setting, index))
+			option_button.set_custom_minimum_size(Vector2(140, 25))
+			return option_button
+		"LineEdit":
+			var line_edit := LineEdit.new()
+			line_edit.set_flat(true)
+			line_edit.text = str(s_value)
+			line_edit.text_submitted.connect(func(new_text): _on_terrain_setting_changed(setting, new_text))
+			line_edit.set_custom_minimum_size(Vector2(200, 25))
+			return line_edit
+		"FolderPicker":
+			var folder_hbox := HBoxContainer.new()
+			folder_hbox.add_theme_constant_override("separation", 4)
+			var path_edit := LineEdit.new()
+			path_edit.set_flat(true)
+			path_edit.text = str(s_value)
+			path_edit.placeholder_text = "(auto - scene relative)"
+			path_edit.text_submitted.connect(func(new_text): _on_terrain_setting_changed(setting, new_text))
+			path_edit.set_custom_minimum_size(Vector2(180, 25))
+			folder_hbox.add_child(path_edit)
+			var browse_btn := Button.new()
+			browse_btn.text = "..."
+			browse_btn.set_custom_minimum_size(Vector2(30, 25))
+			browse_btn.pressed.connect(func(): _open_folder_dialog(setting, path_edit))
+			folder_hbox.add_child(browse_btn)
+			return folder_hbox
+	return null
 
 
 func _get_setting_value(p_setting_name: String) -> Variant:

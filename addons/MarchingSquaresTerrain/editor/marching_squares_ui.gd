@@ -21,8 +21,12 @@ const GRASS_SPRITE_PROPERTIES := [
 ]
 
 const COLOR_PROPERTIES := [
-	"texture_albedo_1", "texture_albedo_2", "texture_albedo_3",
-	"texture_albedo_4", "texture_albedo_5", "texture_albedo_6"
+	"tex1_color_1", "tex1_color_2", "tex1_color_3", "tex1_color_4",
+	"tex2_color_1", "tex2_color_2", "tex2_color_3", "tex2_color_4",
+	"tex3_color_1", "tex3_color_2", "tex3_color_3", "tex3_color_4",
+	"tex4_color_1", "tex4_color_2", "tex4_color_3", "tex4_color_4",
+	"tex5_color_1", "tex5_color_2", "tex5_color_3", "tex5_color_4",
+	"tex6_color_1", "tex6_color_2", "tex6_color_3", "tex6_color_4",
 ]
 
 const HAS_GRASS_PROPERTIES := [
@@ -38,6 +42,7 @@ const TEXTURE_SCALE_PROPERTIES := [
 #endregion
 
 var plugin : MarchingSquaresTerrainPlugin
+var _terrain_snapshot : MarchingSquaresTexturePreset = null
 var toolbar : TOOLBAR
 var tool_attributes : TOOL_ATTRIBUTES
 var texture_settings : TEXTURE_SETTINGS
@@ -164,33 +169,117 @@ func _on_setting_changed(p_setting_name: String, p_value: Variant) -> void:
 			if p_value is int:
 				plugin.vertex_color_idx = p_value
 		"texture_name":
-			if p_value is String:
-				if plugin.vertex_color_idx == 0 or plugin.vertex_color_idx == 15:
+			if p_value is String and p_value != "":
+				var idx := plugin.vertex_color_idx
+				if idx == 0 or idx == 15:
 					return
-				var new_preset_names = plugin.current_texture_preset.new_tex_names.texture_names.duplicate()
-				new_preset_names[plugin.vertex_color_idx] = p_value
-				plugin.current_texture_preset.new_tex_names.texture_names = new_preset_names
+				var terrain := plugin.current_terrain_node
+				if terrain.texture_names.size() > idx:
+					terrain.texture_names[idx] = p_value
 			tool_attributes.show_tool_attributes(active_tool)
 		"texture_preset":
+			if plugin.current_terrain_node.current_texture_preset == null:
+				_terrain_snapshot = MarchingSquaresTexturePreset.new()
+				_terrain_snapshot.new_textures = MarchingSquaresTextureList.new()
+				_terrain_snapshot.new_textures.grass_colors.resize(24)
+				plugin.current_terrain_node.save_to_preset_target(_terrain_snapshot)
+			
 			plugin.current_terrain_node.is_batch_updating = true
 			if p_value is MarchingSquaresTexturePreset:
 				plugin.current_texture_preset = p_value
+				plugin.current_terrain_node.current_texture_preset = p_value
+				_apply_preset_to_terrain(p_value, plugin.current_terrain_node)
 			else:
+				if _terrain_snapshot != null:
+					_apply_preset_to_terrain(_terrain_snapshot, plugin.current_terrain_node)
 				plugin.current_texture_preset = null
+				plugin.current_terrain_node.current_texture_preset = null
 			plugin.current_terrain_node.force_batch_update()
 			plugin.current_terrain_node.is_batch_updating = false
-			for chunk: MarchingSquaresTerrainChunk in plugin.current_terrain_node.chunks.values():
-				chunk.mark_dirty()
-			# Rebuild tool attributes to refresh Quick Paint dropdown
-			tool_attributes.show_tool_attributes(active_tool)
+			tool_attributes.show_tool_attributes.call_deferred(active_tool)
 		"quick_paint_selection":
-			if p_value is MarchingSquaresQuickPaint:
-				plugin.current_quick_paint = p_value
-			else:
-				plugin.current_quick_paint = null
+					if p_value is MarchingSquaresQuickPaint:
+						plugin.current_quick_paint = p_value
+					else:
+						plugin.current_quick_paint = null
 		"paint_walls":
 			if p_value is bool:
 				plugin.paint_walls_mode = p_value
+
+
+func _apply_preset_to_terrain(preset: MarchingSquaresTexturePreset, terrain: MarchingSquaresTerrain) -> void:
+	var t := preset.new_textures
+
+	# Terrain textures
+	terrain.texture_1  = t.terrain_textures[0]
+	terrain.texture_2  = t.terrain_textures[1]
+	terrain.texture_3  = t.terrain_textures[2]
+	terrain.texture_4  = t.terrain_textures[3]
+	terrain.texture_5  = t.terrain_textures[4]
+	terrain.texture_6  = t.terrain_textures[5]
+	terrain.texture_7  = t.terrain_textures[6]
+	terrain.texture_8  = t.terrain_textures[7]
+	terrain.texture_9  = t.terrain_textures[8]
+	terrain.texture_10 = t.terrain_textures[9]
+	terrain.texture_11 = t.terrain_textures[10]
+	terrain.texture_12 = t.terrain_textures[11]
+	terrain.texture_13 = t.terrain_textures[12]
+	terrain.texture_14 = t.terrain_textures[13]
+	terrain.texture_15 = t.terrain_textures[14]
+	# Texture scales
+	terrain.texture_scale_1  = t.texture_scales[0]
+	terrain.texture_scale_2  = t.texture_scales[1]
+	terrain.texture_scale_3  = t.texture_scales[2]
+	terrain.texture_scale_4  = t.texture_scales[3]
+	terrain.texture_scale_5  = t.texture_scales[4]
+	terrain.texture_scale_6  = t.texture_scales[5]
+	terrain.texture_scale_7  = t.texture_scales[6]
+	terrain.texture_scale_8  = t.texture_scales[7]
+	terrain.texture_scale_9  = t.texture_scales[8]
+	terrain.texture_scale_10 = t.texture_scales[9]
+	terrain.texture_scale_11 = t.texture_scales[10]
+	terrain.texture_scale_12 = t.texture_scales[11]
+	terrain.texture_scale_13 = t.texture_scales[12]
+	terrain.texture_scale_14 = t.texture_scales[13]
+	terrain.texture_scale_15 = t.texture_scales[14]
+	# Grass sprites
+	terrain.grass_sprite_tex_1 = t.grass_sprites[0]
+	terrain.grass_sprite_tex_2 = t.grass_sprites[1]
+	terrain.grass_sprite_tex_3 = t.grass_sprites[2]
+	terrain.grass_sprite_tex_4 = t.grass_sprites[3]
+	terrain.grass_sprite_tex_5 = t.grass_sprites[4]
+	terrain.grass_sprite_tex_6 = t.grass_sprites[5]
+	# Grass colors - 24 color version with legacy fallback
+	var c := t.grass_colors
+	if c.size() >= 24:
+		terrain.tex1_color_1 = c[0];  terrain.tex1_color_2 = c[1]
+		terrain.tex1_color_3 = c[2];  terrain.tex1_color_4 = c[3]
+		terrain.tex2_color_1 = c[4];  terrain.tex2_color_2 = c[5]
+		terrain.tex2_color_3 = c[6];  terrain.tex2_color_4 = c[7]
+		terrain.tex3_color_1 = c[8];  terrain.tex3_color_2 = c[9]
+		terrain.tex3_color_3 = c[10]; terrain.tex3_color_4 = c[11]
+		terrain.tex4_color_1 = c[12]; terrain.tex4_color_2 = c[13]
+		terrain.tex4_color_3 = c[14]; terrain.tex4_color_4 = c[15]
+		terrain.tex5_color_1 = c[16]; terrain.tex5_color_2 = c[17]
+		terrain.tex5_color_3 = c[18]; terrain.tex5_color_4 = c[19]
+		terrain.tex6_color_1 = c[20]; terrain.tex6_color_2 = c[21]
+		terrain.tex6_color_3 = c[22]; terrain.tex6_color_4 = c[23]
+	elif c.size() >= 6:
+		terrain.tex1_color_1 = c[0]
+		terrain.tex2_color_1 = c[1]
+		terrain.tex3_color_1 = c[2]
+		terrain.tex4_color_1 = c[3]
+		terrain.tex5_color_1 = c[4]
+		terrain.tex6_color_1 = c[5]
+	# Has grass flags
+	terrain.tex2_has_grass = t.has_grass[0]
+	terrain.tex3_has_grass = t.has_grass[1]
+	terrain.tex4_has_grass = t.has_grass[2]
+	terrain.tex5_has_grass = t.has_grass[3]
+	terrain.tex6_has_grass = t.has_grass[4]
+	# Texture names
+	if preset.new_tex_names and preset.new_tex_names.texture_names.size() > 0:
+		terrain.texture_names = preset.new_tex_names.texture_names.duplicate()		
 
 
 func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> void:
@@ -226,6 +315,12 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"grass_size":
 			if p_value is Vector2:
 				terrain.grass_size = p_value
+		"grass_size_variation":
+			if p_value is float or p_value is int:
+				terrain.grass_size_variation = float(p_value)
+		"grass_size_variation_commit":
+			if p_value is bool and p_value:
+				terrain.rebuild_grass_now = true
 		"use_flat_normals":
 			if p_value is bool:
 				terrain.use_flat_normals = p_value
@@ -252,6 +347,24 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 				# +1 because collision layers don't start from 0 like indexed items
 				# +8 because the selectable collision layers range from 9 to 32
 				terrain.extra_collision_layer = p_value + 9
+		"global_noise_strength":
+			if p_value is float:
+				terrain.global_noise_strength = p_value
+		"global_noise_scale":
+			if p_value is float:
+				terrain.global_noise_scale = p_value
+		"wind_mode":
+			if p_value is int:
+				terrain.wind_mode = p_value
+		"wind_intensity":
+			if p_value is float:
+				terrain.wind_intensity = p_value
+		"wind_tip_color":
+			if p_value is Color:
+				terrain.wind_tip_color = p_value
+		"wind_tip_strength":
+			if p_value is float:
+				terrain.wind_tip_strength = p_value
 
 
 func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> void:
