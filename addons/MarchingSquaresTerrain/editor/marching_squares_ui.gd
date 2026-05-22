@@ -6,6 +6,7 @@ class_name MarchingSquaresUI
 const TOOLBAR : Script = preload("uid://3d77dnetkeik")
 const TOOL_ATTRIBUTES : Script = preload("uid://buxevb44hutjm")
 const TEXTURE_SETTINGS : Script = preload("uid://blvx0jk6wxk5p")
+const PRESET_SAVE_DEBOUNCE_SECONDS := 0.2
 
 #region texture setting property maps
 # Property names that map directly to terrain properties with same name
@@ -75,7 +76,8 @@ func _deferred_enter_tree() -> void:
 
 	_preset_save_timer = Timer.new()
 	_preset_save_timer.one_shot = true
-	_preset_save_timer.wait_time = 0.2
+	# Debounce rapid UI updates (sliders/color dragging) into a single preset disk save.
+	_preset_save_timer.wait_time = PRESET_SAVE_DEBOUNCE_SECONDS
 	_preset_save_timer.timeout.connect(_flush_preset_save)
 	add_child(_preset_save_timer)
 	
@@ -377,7 +379,6 @@ func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 
 func _queue_preset_save() -> void:
 	if _preset_save_timer == null:
-		_flush_preset_save()
 		return
 	_preset_save_timer.start()
 
