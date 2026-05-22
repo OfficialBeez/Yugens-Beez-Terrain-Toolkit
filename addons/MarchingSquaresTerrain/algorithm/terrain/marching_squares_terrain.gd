@@ -538,10 +538,24 @@ enum StorageMode {
 
 # Palette System
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var palette_colors: Array[Color] = []
+# Per palette-index weight (0-100). Used to control per-slot palette distribution.
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var palette_weights: Array[float] = []
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_color_indices: Array = [
 	[], [], [], [], [], [], [], [], [], [], [], [], [], [], []
 ]
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_blend_modes: Array[int] = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
+
+# Outline settings (per texture slot)
+# slot_has_outline[slot] enables a thin edge/foam line where that texture blends with another.
+# slot_outline_modes[slot]: 0 = darken Color 1, 1 = use last palette color
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_has_outline: Array[bool] = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_outline_modes: Array[int] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+@export_custom(PROPERTY_HINT_RANGE, "0.25,32.0,0.25", PROPERTY_USAGE_STORAGE) var outline_width: float = 6.0:
+	set(value):
+		outline_width = clampf(value, 0.25, 32.0)
+		if not is_batch_updating and terrain_material:
+			terrain_material.set_shader_parameter("outline_width", outline_width)
 
 # Default wall texture slot (0-15) used when no quick paint is active
 # Default is 5 (Texture 6 in 1-indexed UI terms)
@@ -818,12 +832,29 @@ func migrate_colors_to_palette() -> void:
 	for i in range(6, 128):
 		palette_colors[i] = Color("647851ff")
 	
+	palette_weights.resize(128)
+	for i in range(128):
+		palette_weights[i] = 100.0
+	
 	slot_color_indices = [[0], [1], [2], [3], [4], [5], [], [], [], [], [], [], [], [], []]
 
 
+func _ensure_palette_weights() -> void:
+	if palette_weights.size() != 128:
+		palette_weights.resize(128)
+	for i in range(128):
+		if palette_weights[i] == null:
+			palette_weights[i] = 100.0
+		palette_weights[i] = clampf(float(palette_weights[i]), 0.0, 100.0)
+
+
 func _rebuild_palette_uniforms() -> void:
+	_ensure_palette_weights()
 	var colors: Array = []
 	colors.resize(120)
+	
+	var weights: Array = []
+	weights.resize(120)
 	
 	var counts: Array = []
 	counts.resize(15)
@@ -835,12 +866,16 @@ func _rebuild_palette_uniforms() -> void:
 		for i in range(8):
 			if i < count and indices[i] < palette_colors.size():
 				colors[slot * 8 + i] = palette_colors[indices[i]]
+				weights[slot * 8 + i] = palette_weights[indices[i]] if indices[i] < palette_weights.size() else 100.0
 			else:
 				colors[slot * 8 + i] = Color.WHITE
+				weights[slot * 8 + i] = 0.0
 	
 	terrain_material.set_shader_parameter("slot_colors", colors)
+	terrain_material.set_shader_parameter("slot_color_weights", weights)
 	terrain_material.set_shader_parameter("slot_color_counts", counts)
 	(grass_mesh.material as ShaderMaterial).set_shader_parameter("slot_colors", colors)
+	(grass_mesh.material as ShaderMaterial).set_shader_parameter("slot_color_weights", weights)
 	(grass_mesh.material as ShaderMaterial).set_shader_parameter("slot_color_counts", counts)
 
 
@@ -848,6 +883,32 @@ func _push_slot_blend_modes() -> void:
 	var modes := PackedInt32Array(slot_blend_modes)
 	terrain_material.set_shader_parameter("slot_blend_modes", modes)
 	(grass_mesh.material as ShaderMaterial).set_shader_parameter("slot_blend_modes", modes)
+
+
+func _ensure_outline_settings() -> void:
+	if slot_has_outline.size() != 15:
+		slot_has_outline.resize(15)
+	if slot_outline_modes.size() != 15:
+		slot_outline_modes.resize(15)
+	for i in range(15):
+		if slot_has_outline[i] == null:
+			slot_has_outline[i] = false
+		if slot_outline_modes[i] == null:
+			slot_outline_modes[i] = 0
+		slot_outline_modes[i] = clampi(int(slot_outline_modes[i]), 0, 1)
+
+
+func _push_slot_outline_settings() -> void:
+	_ensure_outline_settings()
+	var enabled := PackedInt32Array()
+	enabled.resize(15)
+	var modes_arr := PackedInt32Array()
+	modes_arr.resize(15)
+	for i in range(15):
+		enabled[i] = 1 if slot_has_outline[i] else 0
+		modes_arr[i] = clampi(int(slot_outline_modes[i]), 0, 1)
+	terrain_material.set_shader_parameter("slot_has_outline", enabled)
+	terrain_material.set_shader_parameter("slot_outline_modes", modes_arr)
 
 
 ## Applies all shader parameters and regenerates grass once
@@ -934,6 +995,8 @@ func force_batch_update() -> void:
 	# PALETTE SYSTEM - replaces all individual color uniforms
 	_rebuild_palette_uniforms()
 	_push_slot_blend_modes()
+	_push_slot_outline_settings()
+	terrain_material.set_shader_parameter("outline_width", outline_width)
 
 
 ## Syncs and saves current UI texture values to the given preset resource
@@ -988,8 +1051,13 @@ func save_to_preset() -> void:
 	current_texture_preset.new_textures.grass_colors.resize(128)
 	for i in range(128):
 		current_texture_preset.new_textures.grass_colors[i] = palette_colors[i]
+	_ensure_palette_weights()
+	current_texture_preset.palette_weights = palette_weights.duplicate()
 	current_texture_preset.slot_color_indices = slot_color_indices.duplicate(true)
 	current_texture_preset.slot_blend_modes = slot_blend_modes.duplicate()
+	_ensure_outline_settings()
+	current_texture_preset.slot_has_outline = slot_has_outline.duplicate()
+	current_texture_preset.slot_outline_modes = slot_outline_modes.duplicate()
 	
 	# Has grass flags
 	current_texture_preset.new_textures.has_grass[0] = tex2_has_grass
@@ -1015,19 +1083,40 @@ func load_from_preset(preset: MarchingSquaresTexturePreset) -> void:
 		slot_color_indices = preset.slot_color_indices.duplicate(true)
 		if preset.new_textures.grass_colors.size() == 128:
 			palette_colors = preset.new_textures.grass_colors.duplicate()
+		if preset.palette_weights.size() == 128:
+			palette_weights = preset.palette_weights.duplicate()
+		else:
+			palette_weights.resize(128)
+			for i in range(128):
+				palette_weights[i] = 100.0
 	else:
 		# Old preset — reset everything to clean defaults
 		slot_color_indices = [[0], [1], [2], [3], [4], [5], [], [], [], [], [], [], [], [], []]
 		palette_colors.resize(128)
+		palette_weights.resize(128)
 		for i in range(128):
 			palette_colors[i] = Color("647851ff")
+			palette_weights[i] = 100.0
 
 	if preset.slot_blend_modes.size() == 15:
 		slot_blend_modes = preset.slot_blend_modes.duplicate()
 	else:
 		slot_blend_modes = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 
+	if preset.slot_has_outline.size() == 15:
+		slot_has_outline = preset.slot_has_outline.duplicate()
+	else:
+		slot_has_outline = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
+
+	if preset.slot_outline_modes.size() == 15:
+		slot_outline_modes = preset.slot_outline_modes.duplicate()
+	else:
+		slot_outline_modes = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+	_ensure_outline_settings()
+	terrain_material.set_shader_parameter("outline_width", outline_width)
+
 	_rebuild_palette_uniforms()
 	_push_slot_blend_modes()
+	_push_slot_outline_settings()
 
 #endregion

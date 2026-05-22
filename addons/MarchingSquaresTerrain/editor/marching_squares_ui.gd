@@ -282,6 +282,9 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"use_cell_shading":
 			if p_value is bool:
 				terrain.use_cell_shading = p_value
+		"outline_width":
+			if p_value is float or p_value is int:
+				terrain.outline_width = float(p_value)
 		"ridge_threshold":
 			if p_value is float:
 				terrain.ridge_threshold = p_value

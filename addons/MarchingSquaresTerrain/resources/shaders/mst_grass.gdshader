@@ -4,6 +4,7 @@ render_mode diffuse_toon, depth_draw_opaque;
 group_uniforms Visuals.Palette;
 uniform int slot_blend_modes[15];
 uniform vec4 slot_colors[120];
+uniform float slot_color_weights[120];
 uniform int slot_color_counts[15];
 group_uniforms;
 
@@ -170,23 +171,58 @@ vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
 
 	int mode = slot_blend_modes[slot];
 
+	// Weighted distribution (values are normalized per slot).
+	float ws[8];
+	float total = 0.0;
+	for (int i = 0; i < 8; i++) {
+		if (i < color_count) {
+			float w = max(slot_color_weights[slot * 8 + i], 0.0);
+			ws[i] = w;
+			total += w;
+		} else {
+			ws[i] = 0.0;
+		}
+	}
+	if (total <= 0.0001) {
+		total = float(color_count);
+		for (int i = 0; i < 8; i++) {
+			ws[i] = (i < color_count) ? 1.0 : 0.0;
+		}
+	}
+
+	float x = clamp(n, 0.0, 1.0) * total;
+	int i0 = 0;
+	float start = 0.0;
+	float w0 = ws[0];
+	float cum = 0.0;
+	for (int i = 0; i < 8; i++) {
+		if (i >= color_count) break;
+		float wi = ws[i];
+		if (x < cum + wi || i == color_count - 1) {
+			i0 = i;
+			start = cum;
+			w0 = wi;
+			break;
+		}
+		cum += wi;
+	}
+	int i1 = min(i0 + 1, color_count - 1);
+	float t = 0.0;
+	if (w0 > 0.00001) t = clamp((x - start) / w0, 0.0, 1.0);
+
 	if (mode == 1) {
-		int idx = clamp(int(floor(n * float(color_count))), 0, color_count - 1);
-		return sample_palette_entry(slot, idx).rgb;
+		// Retro: hard snap
+		return sample_palette_entry(slot, i0).rgb;
 	} else if (mode == 2) {
+		// Dithered (weight-aware)
 		vec2 dither_coord = floor(vec2(
 			world_xz.x + world_y * 0.7,
 			world_xz.y + world_y * 1.3) * 8.0);
 		float dither = hash(dither_coord);
-		float pos = clamp(n * float(color_count - 1) + dither - 0.5, 0.0, float(color_count - 1));
-		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
-		int i1 = min(i0 + 1, color_count - 1);
-		return mix(sample_palette_entry(slot, i0), sample_palette_entry(slot, i1), fract(pos)).rgb;
+		float sel = step(dither, t);
+		return mix(sample_palette_entry(slot, i0), sample_palette_entry(slot, i1), sel).rgb;
 	} else if (mode == 3) {
-		float pos = n * float(color_count - 1);
-		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
-		int i1 = min(i0 + 1, color_count - 1);
-		float t = fract(pos);
+		// Stipple (weight-aware)
 		float seam = 0.08;
 		if (t < 0.5 - seam) return sample_palette_entry(slot, i0).rgb;
 		else if (t > 0.5 + seam) return sample_palette_entry(slot, i1).rgb;
@@ -196,12 +232,8 @@ vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
 			return checker > 0.5 ? sample_palette_entry(slot, i1).rgb : sample_palette_entry(slot, i0).rgb;
 		}
 	} else {
-		float pos = n * float(color_count - 1);
-		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
-		int i1 = min(i0 + 1, color_count - 1);
-		float seg = 1.0 / float(color_count - 1);
-		float t = smoothstep(float(i0) * seg, float(i0 + 1) * seg, n);
-		return mix(sample_palette_entry(slot, i0), sample_palette_entry(slot, i1), t).rgb;
+		// Gradient (weight-aware)
+		return mix(sample_palette_entry(slot, i0), sample_palette_entry(slot, i1), smoothstep(0.0, 1.0, t)).rgb;
 	}
 }
 

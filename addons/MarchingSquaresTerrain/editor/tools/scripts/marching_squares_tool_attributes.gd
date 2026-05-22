@@ -40,6 +40,7 @@ var terrain_settings_data : Dictionary = {
 		"wall_threshold": "EditorSpinSlider",
 		"use_flat_normals": "CheckBox",
 		"use_cell_shading": "CheckBox",
+		"outline_width": "EditorSpinSlider",
 	},
 	"Grass Settings": {
 		"global_noise_scale": "EditorSpinSlider",
@@ -495,10 +496,15 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 				spin_slider.set_min(0.0)
 				spin_slider.set_max(1.0)
 				spin_slider.allow_greater = true
+			elif setting == "outline_width":
+				spin_slider.set_min(0.25)
+				spin_slider.set_max(32.0)
 			else:
 				spin_slider.set_min(0.005)
 				spin_slider.set_max(1.0)
 			spin_slider.set_step(0.1)
+			if setting == "outline_width":
+				spin_slider.set_step(0.25)
 			spin_slider.set_value(s_value if s_value != null else 0.0)
 			spin_slider.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
 			spin_slider.set_custom_minimum_size(Vector2(120, 25))

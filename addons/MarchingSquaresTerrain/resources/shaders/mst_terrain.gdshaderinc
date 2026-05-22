@@ -6,8 +6,17 @@ group_uniforms;
 
 group_uniforms Visuals.Palette;
 uniform vec4 slot_colors[120]; // 15 slots * 8 colors max — indexed as slot * 8 + color_idx
+uniform float slot_color_weights[120];
 uniform int slot_color_counts[15];
 uniform int slot_blend_modes[15];
+// Outline settings (per slot)
+// slot_has_outline[slot] = 1 enables outlines for that texture slot.
+// slot_outline_modes[slot]: 0 = darken Color 1, 1 = use last palette color.
+uniform int slot_has_outline[15];
+uniform int slot_outline_modes[15];
+// Controls outline thickness. Higher = thicker.
+uniform float outline_width : hint_range(0.25, 32.0, 0.25) = 6.0;
+
 group_uniforms;
 
 group_uniforms Visuals.Vertex_Painting;
@@ -190,28 +199,60 @@ vec4 get_palette_color(int tex_idx, vec2 world_xz) {
 	float n = cheap_noise(p);
 	n = smoothstep(0.0, 1.0, n);
 
+	// Weighted distribution (values are normalized per slot).
+	float ws[8];
+	float total = 0.0;
+	for (int i = 0; i < 8; i++) {
+		if (i < color_count) {
+			float w = max(slot_color_weights[tex_idx * 8 + i], 0.0);
+			ws[i] = w;
+			total += w;
+		} else {
+			ws[i] = 0.0;
+		}
+	}
+	if (total <= 0.0001) {
+		total = float(color_count);
+		for (int i = 0; i < 8; i++) {
+			ws[i] = (i < color_count) ? 1.0 : 0.0;
+		}
+	}
+
+	float x = clamp(n, 0.0, 1.0) * total;
+	int i0 = 0;
+	float start = 0.0;
+	float w0 = ws[0];
+	float cum = 0.0;
+	for (int i = 0; i < 8; i++) {
+		if (i >= color_count) break;
+		float wi = ws[i];
+		if (x < cum + wi || i == color_count - 1) {
+			i0 = i;
+			start = cum;
+			w0 = wi;
+			break;
+		}
+		cum += wi;
+	}
+	int i1 = min(i0 + 1, color_count - 1);
+	float t = 0.0;
+	if (w0 > 0.00001) t = clamp((x - start) / w0, 0.0, 1.0);
+
 	if (mode == 1) {
 		// Retro: hard snap
-		int idx = clamp(int(floor(n * float(color_count))), 0, color_count - 1);
-		return sample_palette_entry(tex_idx, idx);
+		return sample_palette_entry(tex_idx, i0);
 
 	} else if (mode == 2) {
-		// Dithered
+		// Dithered (weight-aware)
 		vec2 dither_coord = floor(vec2(
 			world_xz.x + world_pos.y * 0.7,
 			world_xz.y + world_pos.y * 1.3) * 8.0);
 		float dither = hash(dither_coord);
-		float pos = clamp(n * float(color_count - 1) + dither - 0.5, 0.0, float(color_count - 1));
-		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
-		int i1 = min(i0 + 1, color_count - 1);
-		return mix(sample_palette_entry(tex_idx, i0), sample_palette_entry(tex_idx, i1), fract(pos));
+		float sel = step(dither, t);
+		return mix(sample_palette_entry(tex_idx, i0), sample_palette_entry(tex_idx, i1), sel);
 
 	} else if (mode == 3) {
-		// Stipple
-		float pos = n * float(color_count - 1);
-		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
-		int i1 = min(i0 + 1, color_count - 1);
-		float t = fract(pos);
+		// Stipple (weight-aware)
 		float seam = 0.05;
 		if (t < 0.5 - seam) {
 			return sample_palette_entry(tex_idx, i0);
@@ -224,14 +265,53 @@ vec4 get_palette_color(int tex_idx, vec2 world_xz) {
 		}
 
 	} else {
-		// Gradient
-		float pos = n * float(color_count - 1);
-		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
-		int i1 = min(i0 + 1, color_count - 1);
-		float seg = 1.0 / float(color_count - 1);
-		float t = smoothstep(float(i0) * seg, float(i0 + 1) * seg, n);
-		return mix(sample_palette_entry(tex_idx, i0), sample_palette_entry(tex_idx, i1), t);
+		// Gradient (weight-aware)
+		return mix(sample_palette_entry(tex_idx, i0), sample_palette_entry(tex_idx, i1), smoothstep(0.0, 1.0, t));
 	}
+}
+
+vec4 get_outline_palette_color(int slot) {
+	int count = slot_color_counts[slot];
+	if (count <= 0) return vec4(0.392, 0.471, 0.318, 1.0);
+
+	int mode = slot_outline_modes[slot];
+	if (mode == 1) {
+		// Use last palette color (Color N)
+		return sample_palette_entry(slot, max(count - 1, 0));
+	}
+
+	// Darken first palette color (Color 1)
+	vec4 c = sample_palette_entry(slot, 0);
+	c.rgb *= 0.5;
+	return c;
+}
+
+vec4 sample_material_by_index_tint(int index, vec2 base_uv, vec4 tint) {
+	float scale = 1.0;
+	if (index != 15)
+		scale = get_texture_scale(index);
+	vec2 uv = base_uv * scale;
+	vec4 result = vec4(1.0);
+	switch(index) {
+		case 0:  result = texture(vc_tex_rr, uv) * tint; break;
+		case 1:  result = texture(vc_tex_rg, uv) * tint; break;
+		case 2:  result = texture(vc_tex_rb, uv) * tint; break;
+		case 3:  result = texture(vc_tex_ra, uv) * tint; break;
+		case 4:  result = texture(vc_tex_gr, uv) * tint; break;
+		case 5:  result = texture(vc_tex_gg, uv) * tint; break;
+		case 6:  result = texture(vc_tex_gb, uv) * tint; break;
+		case 7:  result = texture(vc_tex_ga, uv) * tint; break;
+		case 8:  result = texture(vc_tex_br, uv) * tint; break;
+		case 9:  result = texture(vc_tex_bg, uv) * tint; break;
+		case 10: result = texture(vc_tex_bb, uv) * tint; break;
+		case 11: result = texture(vc_tex_ba, uv) * tint; break;
+		case 12: result = texture(vc_tex_ar, uv) * tint; break;
+		case 13: result = texture(vc_tex_ag, uv) * tint; break;
+		case 14: result = texture(vc_tex_ab, uv) * tint; break;
+		case 15: result = texture(vc_tex_aa, uv) * tint; break;
+		default: result = texture(vc_tex_rr, uv) * tint; break;
+	}
+	return result;
 }
 
 vec4 sample_material_by_index(int index, vec2 base_uv) {
@@ -381,8 +461,15 @@ void fragment() {
 
 	vec4 floor_color;
 	vec3 wall_color;
+
+	vec2 floor_uv = vec2(0.0);
+	int edge_mat_a = -1;
+	int edge_mat_b = -1;
+	float edge_weight_a = 0.0;
+	float edge_weight_b = 0.0;
+
 	if (is_floor) {
-		vec2 floor_uv = UV2 * tiling_factor_floor;
+		floor_uv = UV2 * tiling_factor_floor;
 
 		if (use_hard_textures) {
 			if (blend_mode == 2)
@@ -400,11 +487,33 @@ void fragment() {
 				effective_sharpness = mix(blend_sharpness, blend_sharpness * (0.5 + n), blend_noise_strength);
 			}
 			calculate_blend_weights(vc_color_0, vc_color_1, effective_sharpness, weights);
+
+			float top1_w = 0.0;
+			float top2_w = 0.0;
+			int top1_idx = 0;
+			int top2_idx = 0;
+
 			floor_color = vec4(0.0);
 			for (int i = 0; i < 16; i++) {
-				if (weights[i] > 0.01)
-					floor_color += sample_material_by_index(i, floor_uv) * weights[i];
+				float w = weights[i];
+				if (w > 0.01)
+					floor_color += sample_material_by_index(i, floor_uv) * w;
+
+				if (w > top1_w) {
+					top2_w = top1_w;
+					top2_idx = top1_idx;
+					top1_w = w;
+					top1_idx = i;
+				} else if (w > top2_w) {
+					top2_w = w;
+					top2_idx = i;
+				}
 			}
+
+			edge_mat_a = top1_idx;
+			edge_mat_b = top2_idx;
+			edge_weight_a = top1_w;
+			edge_weight_b = top2_w;
 		}
 		else {
 			int mat_a = int(round(mat_indices.x * 15.0));
@@ -440,6 +549,29 @@ void fragment() {
 				float total = weight_a + weight_b + weight_c;
 				if (total > 0.001) { weight_a /= total; weight_b /= total; weight_c /= total; }
 			}
+
+			int top1_idx = mat_a;
+			int top2_idx = mat_b;
+			float top1_w = weight_a;
+			float top2_w = weight_b;
+			if (top2_w > top1_w) {
+				int ti = top1_idx; top1_idx = top2_idx; top2_idx = ti;
+				float tw = top1_w; top1_w = top2_w; top2_w = tw;
+			}
+			if (weight_c > top1_w) {
+				top2_idx = top1_idx;
+				top2_w = top1_w;
+				top1_idx = mat_c;
+				top1_w = weight_c;
+			} else if (weight_c > top2_w) {
+				top2_idx = mat_c;
+				top2_w = weight_c;
+			}
+
+			edge_mat_a = top1_idx;
+			edge_mat_b = top2_idx;
+			edge_weight_a = top1_w;
+			edge_weight_b = top2_w;
 
 			floor_color = sample_material_by_index(mat_a, floor_uv) * weight_a
 						+ sample_material_by_index(mat_b, floor_uv) * weight_b
@@ -488,6 +620,37 @@ void fragment() {
 		vec3 rl_x = sample_material_by_index(int(nearest_wall_color_idx), UV2 * tiling_factor_wall).rgb * tri_weights.x;
 		vec3 rl_z = sample_material_by_index(int(nearest_wall_color_idx), UV2 * tiling_factor_wall).rgb * tri_weights.z;
 		ALBEDO = mix(floor_color.rgb, rl_x + rl_z, mixed_blend_factor);
+	}
+
+	// Material outlines ("land foam" style). Uses weight equality band, so it doesn't widen with brush falloff.
+	if (is_floor) {
+		if (edge_mat_a >= 0 && edge_mat_b >= 0
+				&& edge_mat_a != edge_mat_b
+				&& edge_mat_a < 15 && edge_mat_b < 15
+				&& edge_weight_b > 0.001) {
+
+			int ha = slot_has_outline[edge_mat_a];
+			int hb = slot_has_outline[edge_mat_b];
+			int outline_slot = -1;
+			if (ha == 1 && hb == 0) outline_slot = edge_mat_a;
+			else if (hb == 1 && ha == 0) outline_slot = edge_mat_b;
+			else if (ha == 1 && hb == 1) outline_slot = min(edge_mat_a, edge_mat_b);
+
+			if (outline_slot >= 0) {
+				float min_w = min(edge_weight_a, edge_weight_b);
+				float diff = edge_weight_a - edge_weight_b;
+				float d = abs(diff);
+				float fw = fwidth(diff);
+				float band = max(fw * outline_width, 0.0001);
+				float mask = 1.0 - smoothstep(0.0, band, d);
+				mask *= smoothstep(0.0, 0.15, min_w);
+
+
+				vec4 tint = get_outline_palette_color(outline_slot);
+				vec3 outline_rgb = sample_material_by_index_tint(outline_slot, floor_uv, tint).rgb;
+				ALBEDO = mix(ALBEDO, outline_rgb, mask);
+			}
+		}
 	}
 
 	if (is_floor && global_noise_strength > 0.0) {
