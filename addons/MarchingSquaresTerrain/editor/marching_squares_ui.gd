@@ -35,7 +35,6 @@ const TEXTURE_SCALE_PROPERTIES := [
 #endregion
 
 var plugin : MarchingSquaresTerrainPlugin
-var _terrain_snapshot : MarchingSquaresTexturePreset = null
 var toolbar : TOOLBAR
 var tool_attributes : TOOL_ATTRIBUTES
 var texture_settings : TEXTURE_SETTINGS
@@ -161,34 +160,17 @@ func _on_setting_changed(p_setting_name: String, p_value: Variant) -> void:
 		"material": # Vertex paint setting
 			if p_value is int:
 				plugin.vertex_color_idx = p_value
-		"texture_name":
-			if p_value is String and p_value != "":
-				var idx := plugin.vertex_color_idx
-				if idx == 0 or idx == 15:
-					return
-				var terrain := plugin.current_terrain_node
-				if terrain.texture_names.size() > idx:
-					terrain.texture_names[idx] = p_value
-					if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
-						terrain.save_to_preset()
-					elif _terrain_snapshot != null:
-						terrain.save_to_preset_target(_terrain_snapshot)
 		"texture_preset":
-			if plugin.current_terrain_node.current_texture_preset == null:
-				_terrain_snapshot = MarchingSquaresTexturePreset.new()
-				_terrain_snapshot.new_textures = MarchingSquaresTextureList.new()
-				_terrain_snapshot.new_textures.grass_colors.resize(128)
-				plugin.current_terrain_node.save_to_preset_target(_terrain_snapshot)
-			
+			plugin.current_terrain_node.is_batch_updating = true
 			if p_value is MarchingSquaresTexturePreset:
 				plugin.current_texture_preset = p_value
 			else:
-				if _terrain_snapshot != null:
-					plugin.current_texture_preset = _terrain_snapshot
-				else:
-					plugin.current_texture_preset = null
-			
-			tool_attributes.show_tool_attributes.call_deferred(active_tool)
+				plugin.current_texture_preset = null
+			plugin.current_terrain_node.force_batch_update()
+			plugin.current_terrain_node.is_batch_updating = false
+			for chunk: MarchingSquaresTerrainChunk in plugin.current_terrain_node.chunks.values():
+				chunk.mark_dirty()
+			tool_attributes.show_tool_attributes(active_tool)
 		"quick_paint_selection":
 					if p_value is MarchingSquaresQuickPaint:
 						plugin.current_quick_paint = p_value
@@ -249,9 +231,7 @@ func _apply_preset_to_terrain(preset: MarchingSquaresTexturePreset, terrain: Mar
 	terrain.tex4_has_grass = t.has_grass[2]
 	terrain.tex5_has_grass = t.has_grass[3]
 	terrain.tex6_has_grass = t.has_grass[4]
-	# Texture names
-	if preset.new_tex_names and preset.new_tex_names.texture_names.size() > 0:
-		terrain.texture_names = preset.new_tex_names.texture_names.duplicate()		
+
 
 
 func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> void:
@@ -365,7 +345,8 @@ func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		if p_value is float or p_value is int:
 			terrain.set(p_setting_name, float(p_value))
 	
-	terrain.save_to_preset()
+	if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+		terrain.save_to_preset()
 
 
 #endregion

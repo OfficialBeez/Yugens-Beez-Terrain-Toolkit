@@ -2,9 +2,9 @@ shader_type spatial;
 render_mode diffuse_toon, depth_draw_opaque;
 
 group_uniforms Visuals.Palette;
-uniform sampler2D palette_texture : source_color, filter_nearest;
-uniform sampler2D slot_index_texture : filter_nearest;
 uniform int slot_blend_modes[15];
+uniform vec4 slot_colors[120];
+uniform int slot_color_counts[15];
 group_uniforms;
 
 group_uniforms Visuals.Textures;
@@ -34,7 +34,7 @@ uniform bool use_base_color_6 = false;
 group_uniforms;
 
 group_uniforms Animations.Settings;
-uniform bool animate_active = true;
+uniform bool animate_active = false;
 uniform float fps : hint_range(0.0, 30.0, 1.0) = 0.0;
 group_uniforms;
 
@@ -70,6 +70,8 @@ group_uniforms;
 uniform float global_noise_scale = 0.08;
 uniform float global_noise_strength = 0.3;
 
+varying float v_brightness;
+varying vec3 v_grass_color;
 varying vec3 model_origin;
 varying vec3 instance_color;
 varying float instance_sprite_id;
@@ -91,6 +93,13 @@ float noise(vec2 p) {
 	float c = hash(i + vec2(0.0, 1.0));
 	float d = hash(i + vec2(1.0, 1.0));
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float cheap_noise(vec2 p) {
+	vec2 warp = vec2(
+		noise(p + vec2(1.7, 9.2)),
+		noise(p + vec2(8.3, 2.8)));
+	return noise(p + warp * 0.4) * 0.6 + noise(p * 2.1 + vec2(5.2, 1.3)) * 0.4;
 }
 
 float fbm(vec2 p) {
@@ -143,38 +152,28 @@ float turbulent_wind(vec2 world_xz, float t) {
 
 // ---------------- End of Wind -------------------------
 
-vec4 sample_palette_entry(int slot, int color_idx_in_slot) {
-	vec2 uv = vec2((float(color_idx_in_slot) + 0.5) / 16.0, (float(slot) + 0.5) / 15.0);
-	float palette_idx_norm = texture(slot_index_texture, uv).r;
-	int palette_idx = int(round(palette_idx_norm * 127.0));
-	return texture(palette_texture, vec2((float(palette_idx) + 0.5) / 128.0, 0.5));
+vec4 sample_palette_entry(int slot, int color_idx) {
+	return slot_colors[slot * 8 + clamp(color_idx, 0, 7)];
 }
 
 vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
-	vec2 count_uv = vec2(0.5 / 16.0, (float(slot) + 0.5) / 15.0);
-	int color_count = int(round(texture(slot_index_texture, count_uv).g * 16.0));
+	int color_count = slot_color_counts[slot];
 
 	if (color_count <= 0) return vec3(0.392, 0.471, 0.318);
-	if (color_count == 1) return sample_palette_entry(slot, 0).rgb;
+	if (color_count == 1) return slot_colors[slot * 8].rgb;
 
-	// Same domain-warped noise as terrain shader
 	vec2 p = vec2(
 		world_xz.x * 0.06 + world_xz.y * 0.041 + world_y * 0.06,
 		world_xz.y * 0.06 - world_xz.x * 0.037 + world_y * 0.059);
-	vec2 warp = vec2(
-		fbm(p + vec2(1.7, 9.2)),
-		fbm(p + vec2(8.3, 2.8)));
-	float n = fbm(p + warp * 0.6);
+	float n = cheap_noise(p);
 	n = smoothstep(0.0, 1.0, n);
 
 	int mode = slot_blend_modes[slot];
 
 	if (mode == 1) {
-		// Retro
 		int idx = clamp(int(floor(n * float(color_count))), 0, color_count - 1);
 		return sample_palette_entry(slot, idx).rgb;
 	} else if (mode == 2) {
-		// Dithered
 		vec2 dither_coord = floor(vec2(
 			world_xz.x + world_y * 0.7,
 			world_xz.y + world_y * 1.3) * 8.0);
@@ -184,7 +183,6 @@ vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
 		int i1 = min(i0 + 1, color_count - 1);
 		return mix(sample_palette_entry(slot, i0), sample_palette_entry(slot, i1), fract(pos)).rgb;
 	} else if (mode == 3) {
-		// Stipple
 		float pos = n * float(color_count - 1);
 		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
 		int i1 = min(i0 + 1, color_count - 1);
@@ -198,7 +196,6 @@ vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
 			return checker > 0.5 ? sample_palette_entry(slot, i1).rgb : sample_palette_entry(slot, i0).rgb;
 		}
 	} else {
-		// Gradient
 		float pos = n * float(color_count - 1);
 		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
 		int i1 = min(i0 + 1, color_count - 1);
@@ -311,6 +308,31 @@ void vertex() {
 	instance_color = INSTANCE_CUSTOM.rgb;
 	instance_sprite_id = INSTANCE_CUSTOM.a;
 	instance_id = INSTANCE_ID;
+	
+	vec3 _gc;
+	if (instance_sprite_id > 0.9)
+		_gc = use_base_color_6 ? get_grass_palette_color(5, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(5, world_origin.xz, world_origin.y);
+	else if (instance_sprite_id > 0.7)
+		_gc = use_base_color_5 ? get_grass_palette_color(4, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(4, world_origin.xz, world_origin.y);
+	else if (instance_sprite_id > 0.5)
+		_gc = use_base_color_4 ? get_grass_palette_color(3, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(3, world_origin.xz, world_origin.y);
+	else if (instance_sprite_id > 0.3)
+		_gc = use_base_color_3 ? get_grass_palette_color(2, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(2, world_origin.xz, world_origin.y);
+	else if (instance_sprite_id > 0.1)
+		_gc = use_base_color_2 ? get_grass_palette_color(1, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(1, world_origin.xz, world_origin.y);
+	else
+		_gc = use_base_color_1 ? get_grass_palette_color(0, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(0, world_origin.xz, world_origin.y);
+	v_grass_color = _gc;
+	
+	v_brightness = 1.0;
+	if (global_noise_strength > 0.0) {
+			float gn = fbm(vec2(
+				world_origin.x * global_noise_scale + world_origin.z * 0.031,
+				world_origin.z * global_noise_scale - world_origin.x * 0.023
+			));
+			gn = smoothstep(0.0, 1.0, gn);
+			v_brightness = mix(1.0 - global_noise_strength, 1.0 + (global_noise_strength * 0.5), gn);
+	}
 
 	vec3 world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	vertex_normal = world_normal;
@@ -320,26 +342,13 @@ void fragment() {
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 	vec4 grass_tex = texture(grass_texture_1, UV);
 
-	vec3 grass_color;
+	vec3 grass_color = v_grass_color;
 	int tex_id = 1;
-	if (instance_sprite_id > 0.9) {
-		grass_color = use_base_color_6 ? get_grass_palette_color(5, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(5, world_origin.xz, world_origin.y);
-		tex_id = 6;
-	} else if (instance_sprite_id > 0.7) {
-		grass_color = use_base_color_5 ? get_grass_palette_color(4, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(4, world_origin.xz, world_origin.y);
-		tex_id = 5;
-	} else if (instance_sprite_id > 0.5) {
-		grass_color = use_base_color_4 ? get_grass_palette_color(3, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(3, world_origin.xz, world_origin.y);
-		tex_id = 4;
-	} else if (instance_sprite_id > 0.3) {
-		grass_color = use_base_color_3 ? get_grass_palette_color(2, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(2, world_origin.xz, world_origin.y);
-		tex_id = 3;
-	} else if (instance_sprite_id > 0.1) {
-		grass_color = use_base_color_2 ? get_grass_palette_color(1, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(1, world_origin.xz, world_origin.y);
-		tex_id = 2;
-	} else {
-		grass_color = use_base_color_1 ? get_grass_palette_color(0, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(0, world_origin.xz, world_origin.y);
-	}
+	if (instance_sprite_id > 0.9) tex_id = 6;
+	else if (instance_sprite_id > 0.7) tex_id = 5;
+	else if (instance_sprite_id > 0.5) tex_id = 4;
+	else if (instance_sprite_id > 0.3) tex_id = 3;
+	else if (instance_sprite_id > 0.1) tex_id = 2;
 
 	if (wind_tip_strength > 0.0) {
 		float tip_mask = smoothstep(0.4, 1.0, 1.0 - UV.y);
@@ -373,15 +382,7 @@ void fragment() {
 
 	if (ALPHA < 0.1) discard;
 
-	if (global_noise_strength > 0.0) {
-		float gn = fbm(vec2(
-			world_origin.x * global_noise_scale + world_origin.z * 0.031,
-			world_origin.z * global_noise_scale - world_origin.x * 0.023
-		));
-		gn = smoothstep(0.0, 1.0, gn);
-		float brightness = mix(1.0 - global_noise_strength, 1.0 + (global_noise_strength * 0.5), gn);
-		ALBEDO *= brightness;
-	}
+	ALBEDO *= v_brightness;
 
 	LIGHT_VERTEX = model_origin;
 }

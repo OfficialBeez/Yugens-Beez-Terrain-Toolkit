@@ -605,6 +605,8 @@ func _recreate_collision_body() -> void:
 		for group in get_groups():
 			if group.begins_with("navmesh_"):
 				body.add_to_group(group)
+
+# This just redoes the create_trimesh but adds depth up to 1 unit
 func create_collision_with_depth(depth: float) -> void:
 	if depth <= 0.0:
 		create_trimesh_collision()

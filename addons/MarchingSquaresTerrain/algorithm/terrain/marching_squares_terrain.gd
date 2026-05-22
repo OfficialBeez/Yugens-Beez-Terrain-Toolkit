@@ -74,12 +74,6 @@ enum StorageMode {
 ## Tracks the mode used during the last successful save for reporting purposes.
 @export_storage var _last_storage_mode : StorageMode = StorageMode.BAKED
 
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_names: Array[String] = [
-	"Texture 1", "Texture 2", "Texture 3", "Texture 4", "Texture 5",
-	"Texture 6", "Texture 7", "Texture 8", "Texture 9", "Texture 10",
-	"Texture 11", "Texture 12", "Texture 13", "Texture 14", "Texture 15"
-]
-
 #region global terrain settings
 # Terrain Settings
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var dimensions : Vector3i = Vector3i(33, 32, 33): # Total amount of height values in X and Z direction, and total height range
@@ -827,34 +821,27 @@ func migrate_colors_to_palette() -> void:
 	slot_color_indices = [[0], [1], [2], [3], [4], [5], [], [], [], [], [], [], [], [], []]
 
 
-func _rebuild_palette_texture() -> void:
-	if palette_colors.size() < 128:
-		palette_colors.resize(128)
+func _rebuild_palette_uniforms() -> void:
+	var colors: Array = []
+	colors.resize(120)
 	
-	var img := Image.create(128, 1, false, Image.FORMAT_RGBA8)
-	for i in range(128):
-		var c : Color = palette_colors[i]
-		img.set_pixel(i, 0, c)
-	
-	var tex := ImageTexture.create_from_image(img)
-	terrain_material.set_shader_parameter("palette_texture", tex)
-	(grass_mesh.material as ShaderMaterial).set_shader_parameter("palette_texture", tex)
-
-
-func _rebuild_slot_index_texture() -> void:
-	# 16 wide x 6 tall — each row is one slot, each pixel's R channel = palette index
-	var img := Image.create(16, 15, false, Image.FORMAT_RGBA8)
-	img.fill(Color(0, 0, 0, 1))
+	var counts: Array = []
+	counts.resize(15)
 	
 	for slot in range(15):
-		var indices : Array = slot_color_indices[slot]
-		for i in range(min(indices.size(), 16)):
-			var normalized := float(indices[i]) / 127.0
-			img.set_pixel(i, slot, Color(normalized, float(indices.size()) / 16.0, 0.0, 1.0))
+		var indices: Array = slot_color_indices[slot] if slot < slot_color_indices.size() else []
+		var count := mini(indices.size(), 8)
+		counts[slot] = maxi(count, 1)
+		for i in range(8):
+			if i < count and indices[i] < palette_colors.size():
+				colors[slot * 8 + i] = palette_colors[indices[i]]
+			else:
+				colors[slot * 8 + i] = Color.WHITE
 	
-	var tex := ImageTexture.create_from_image(img)
-	terrain_material.set_shader_parameter("slot_index_texture", tex)
-	(grass_mesh.material as ShaderMaterial).set_shader_parameter("slot_index_texture", tex)
+	terrain_material.set_shader_parameter("slot_colors", colors)
+	terrain_material.set_shader_parameter("slot_color_counts", counts)
+	(grass_mesh.material as ShaderMaterial).set_shader_parameter("slot_colors", colors)
+	(grass_mesh.material as ShaderMaterial).set_shader_parameter("slot_color_counts", counts)
 
 
 func _push_slot_blend_modes() -> void:
@@ -945,8 +932,7 @@ func force_batch_update() -> void:
 	grass_mat.set_shader_parameter("color_variation_strength", color_variation_strength)
 
 	# PALETTE SYSTEM - replaces all individual color uniforms
-	_rebuild_palette_texture()
-	_rebuild_slot_index_texture()
+	_rebuild_palette_uniforms()
 	_push_slot_blend_modes()
 
 
@@ -1012,65 +998,8 @@ func save_to_preset() -> void:
 	current_texture_preset.new_textures.has_grass[3] = tex5_has_grass
 	current_texture_preset.new_textures.has_grass[4] = tex6_has_grass
 	
-	if texture_names.size() > 0:
-		if current_texture_preset.new_tex_names == null:
-			current_texture_preset.new_tex_names = MarchingSquaresTextureNames.new()
-		current_texture_preset.new_tex_names.texture_names = texture_names.duplicate()
 	ResourceSaver.save(current_texture_preset)
 
-# Creates a snapshot of your last Preset
-func save_to_preset_target(target: MarchingSquaresTexturePreset) -> void:
-	target.new_textures.grass_colors.resize(128)
-	for i in range(128):
-		target.new_textures.grass_colors[i] = palette_colors[i]
-	target.slot_color_indices = slot_color_indices.duplicate(true)
-	target.slot_blend_modes = slot_blend_modes.duplicate()
-	target.new_textures.terrain_textures[6] = texture_7
-	target.new_textures.terrain_textures[7] = texture_8
-	target.new_textures.terrain_textures[8] = texture_9
-	target.new_textures.terrain_textures[9] = texture_10
-	target.new_textures.terrain_textures[10] = texture_11
-	target.new_textures.terrain_textures[11] = texture_12
-	target.new_textures.terrain_textures[12] = texture_13
-	target.new_textures.terrain_textures[13] = texture_14
-	target.new_textures.terrain_textures[14] = texture_15
-	target.new_textures.terrain_textures[0] = texture_1
-	target.new_textures.terrain_textures[1] = texture_2 
-	target.new_textures.terrain_textures[2] = texture_3 
-	target.new_textures.terrain_textures[3] = texture_4  
-	target.new_textures.terrain_textures[4] = texture_5 
-	target.new_textures.terrain_textures[5] = texture_6  
-	target.new_textures.terrain_textures[6] = texture_7
-	target.new_textures.texture_scales[0] = texture_scale_1
-	target.new_textures.texture_scales[1] = texture_scale_2
-	target.new_textures.texture_scales[2] = texture_scale_3
-	target.new_textures.texture_scales[3] = texture_scale_4
-	target.new_textures.texture_scales[4] = texture_scale_5
-	target.new_textures.texture_scales[5] = texture_scale_6
-	target.new_textures.texture_scales[6] = texture_scale_7
-	target.new_textures.texture_scales[7] = texture_scale_8
-	target.new_textures.texture_scales[8] = texture_scale_9
-	target.new_textures.texture_scales[9] = texture_scale_10
-	target.new_textures.texture_scales[10] = texture_scale_11
-	target.new_textures.texture_scales[11] = texture_scale_12
-	target.new_textures.texture_scales[12] = texture_scale_13
-	target.new_textures.texture_scales[13] = texture_scale_14
-	target.new_textures.texture_scales[14] = texture_scale_15
-	target.new_textures.grass_sprites[0] = grass_sprite_tex_1
-	target.new_textures.grass_sprites[1] = grass_sprite_tex_2
-	target.new_textures.grass_sprites[2] = grass_sprite_tex_3
-	target.new_textures.grass_sprites[3] = grass_sprite_tex_4
-	target.new_textures.grass_sprites[4] = grass_sprite_tex_5
-	target.new_textures.grass_sprites[5] = grass_sprite_tex_6
-	target.new_textures.has_grass[0] = tex2_has_grass
-	target.new_textures.has_grass[1] = tex3_has_grass
-	target.new_textures.has_grass[2] = tex4_has_grass
-	target.new_textures.has_grass[3] = tex5_has_grass
-	target.new_textures.has_grass[4] = tex6_has_grass
-	if texture_names.size() > 0:
-		if target.new_tex_names == null:
-			target.new_tex_names = MarchingSquaresTextureNames.new()
-		target.new_tex_names.texture_names = texture_names.duplicate()
 
 func load_from_preset(preset: MarchingSquaresTexturePreset) -> void:
 	if preset == null:
@@ -1098,8 +1027,7 @@ func load_from_preset(preset: MarchingSquaresTexturePreset) -> void:
 	else:
 		slot_blend_modes = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 
-	_rebuild_palette_texture()
-	_rebuild_slot_index_texture()
+	_rebuild_palette_uniforms()
 	_push_slot_blend_modes()
 
 #endregion

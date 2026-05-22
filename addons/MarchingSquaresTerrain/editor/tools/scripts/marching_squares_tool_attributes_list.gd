@@ -73,12 +73,6 @@ var material : Dictionary = {
 	"default": 0,
 }
 
-var texture_name : Dictionary = {
-	"name": "texture_name",
-	"type": "text",
-	"label": "Texture Name",
-	"default": "New name here...",
-}
 
 var texture_preset : Dictionary = {
 	"name": "texture_preset",

@@ -95,23 +95,15 @@ func add_texture_settings() -> void:
 		child.queue_free()
 	
 	var terrain := plugin.current_terrain_node
-	while terrain.texture_names.size() < 16:
-		terrain.texture_names.append("Texture " + str(terrain.texture_names.size() + 1))
 	
 	var vbox := VBoxContainer.new()
 	vbox.set_custom_minimum_size(Vector2(150, 0))
 	
 	for i in range(15):
-		# Texture name LineEdit
-		var name_edit := LineEdit.new()
-		name_edit.text = terrain.texture_names[i]
-		name_edit.placeholder_text = "Texture " + str(i + 1)
-		name_edit.set_custom_minimum_size(Vector2(150, 25))
-		name_edit.text_submitted.connect(func(new_name):
-			terrain.texture_names[i] = new_name
-			plugin.ui.tool_attributes.show_tool_attributes(plugin.active_tool)
-		)
-		vbox.add_child(name_edit, true)
+		var name_label := Label.new()
+		name_label.text = plugin.current_terrain_node.current_texture_preset.new_tex_names.texture_names[i] if plugin.current_terrain_node.current_texture_preset and plugin.current_terrain_node.current_texture_preset.new_tex_names and i < plugin.current_terrain_node.current_texture_preset.new_tex_names.texture_names.size() else "Texture " + str(i + 1)
+		name_label.set_custom_minimum_size(Vector2(150, 25))
+		vbox.add_child(name_label, true)
 		
 		# Ground texture picker
 		var tex_var : Texture2D = terrain.get(VAR_NAMES[i].get("tex_var"))
@@ -254,7 +246,7 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 		remove_btn.set_custom_minimum_size(Vector2(25, 25))
 		remove_btn.pressed.connect(func(s = slot, ci_idx = ci):
 			terrain.slot_color_indices[s].remove_at(ci_idx)
-			terrain._rebuild_slot_index_texture()
+			terrain._rebuild_palette_uniforms()
 			terrain.save_to_preset()
 			add_texture_settings()
 		)
@@ -279,8 +271,7 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 			return
 		terrain.palette_colors[next_idx] = Color("647851ff")
 		terrain.slot_color_indices[s].append(next_idx)
-		terrain._rebuild_palette_texture()
-		terrain._rebuild_slot_index_texture()
+		terrain._rebuild_palette_uniforms()
 		terrain.save_to_preset()
 		add_texture_settings()
 	)
