@@ -140,14 +140,7 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 			for child in get_children():
 				if child is StaticBody3D:
 					child.free()
-			create_trimesh_collision()
-			for child in get_children():
-				if child is StaticBody3D:
-					child.collision_layer = 17
-					child.set_collision_layer_value(terrain_system.extra_collision_layer, true)
-					for _child in child.get_children():
-						if _child is CollisionShape3D:
-							_child.set_visible(false)
+			create_collision_with_depth(terrain_system.collision_depth)
 	
 	if not EngineWrapper.instance.is_editor() and terrain_system.enable_runtime_texture_baking:
 		var baker := MarchingSquaresGeometryBaker.new()
@@ -289,14 +282,7 @@ func regenerate_mesh(use_threads: bool = false):
 	for child in get_children():
 		if child is StaticBody3D:
 			child.free()
-	create_trimesh_collision()
-	for child in get_children():
-		if child is StaticBody3D:
-			child.collision_layer = 17
-			child.set_collision_layer_value(terrain_system.extra_collision_layer, true)
-			for _child in child.get_children():
-				if _child is CollisionShape3D:
-					_child.set_visible(false)
+	create_collision_with_depth(terrain_system.collision_depth)
 	
 	var elapsed_time : int = Time.get_ticks_msec() - start_time
 	print_verbose("Generated terrain in "+str(elapsed_time)+"ms")
@@ -619,6 +605,72 @@ func _recreate_collision_body() -> void:
 		for group in get_groups():
 			if group.begins_with("navmesh_"):
 				body.add_to_group(group)
+func create_collision_with_depth(depth: float) -> void:
+	if depth <= 0.0:
+		create_trimesh_collision()
+		_apply_collision_layers()
+		return
+	
+	var surface_faces := mesh.get_faces()
+	var extra_faces := PackedVector3Array()
+	
+	var i := 0
+	while i < surface_faces.size():
+		var v0 := surface_faces[i]
+		var v1 := surface_faces[i + 1]
+		var v2 := surface_faces[i + 2]
+		var normal := (v1 - v0).cross(v2 - v0).normalized()
+		
+		if absf(normal.y) > terrain_system.wall_threshold:
+			var d := Vector3(0, -depth, 0)
+			var v0b := v0 + d
+			var v1b := v1 + d
+			var v2b := v2 + d
+			# Bottom face (flipped winding)
+			extra_faces.append_array([v0b, v2b, v1b])
+			# Side walls
+			extra_faces.append_array([v0, v1, v1b, v0, v1b, v0b])
+			extra_faces.append_array([v1, v2, v2b, v1, v2b, v1b])
+			extra_faces.append_array([v2, v0, v0b, v2, v0b, v2b])
+		i += 3
+		
+	var all_faces := PackedVector3Array()
+	all_faces.append_array(surface_faces)
+	all_faces.append_array(extra_faces)
+	
+	var shape := ConcavePolygonShape3D.new()
+	shape.set_faces(all_faces)
+	
+	for child in get_children():
+		if child is StaticBody3D:
+			child.free()
+	
+	var body := StaticBody3D.new()
+	body.name = name + "_col"
+	var col_shape := CollisionShape3D.new()
+	col_shape.name = "CollisionShape3D"
+	col_shape.shape = shape
+	col_shape.visible = false
+	body.add_child(col_shape)
+	add_child(body)
+	
+	if EngineWrapper.instance.is_editor():
+		var scene_root = EngineWrapper.instance.get_root_for_node(self)
+		if scene_root:
+			body.owner = scene_root
+			col_shape.owner = scene_root
+	
+	_apply_collision_layers()
+
+
+func _apply_collision_layers() -> void:
+	for child in get_children():
+		if child is StaticBody3D:
+			child.collision_layer = 17
+			child.set_collision_layer_value(terrain_system.extra_collision_layer, true)
+			for _child in child.get_children():
+				if _child is CollisionShape3D:
+					_child.set_visible(false)
 
 
 func regenerate_all_cells(use_threads: bool):

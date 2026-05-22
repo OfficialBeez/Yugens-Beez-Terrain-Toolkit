@@ -4,31 +4,10 @@ uniform vec2 cell_size = vec2(2.0, 2.0);
 uniform float wall_threshold : hint_range(0.0, 0.5) = 0.0; // Experimental feature (used for rounding merge thresholds)
 group_uniforms;
 
-group_uniforms Visuals.Albedo;
-uniform vec4 tex1_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
-uniform vec4 tex1_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
-uniform vec4 tex1_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
-uniform vec4 tex1_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
-uniform vec4 tex2_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
-uniform vec4 tex2_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
-uniform vec4 tex2_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
-uniform vec4 tex2_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
-uniform vec4 tex3_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
-uniform vec4 tex3_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
-uniform vec4 tex3_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
-uniform vec4 tex3_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
-uniform vec4 tex4_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
-uniform vec4 tex4_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
-uniform vec4 tex4_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
-uniform vec4 tex4_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
-uniform vec4 tex5_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
-uniform vec4 tex5_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
-uniform vec4 tex5_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
-uniform vec4 tex5_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
-uniform vec4 tex6_color_1 : source_color = vec4(0.392, 0.471, 0.318, 1.0);
-uniform vec4 tex6_color_2 : source_color = vec4(0.322, 0.482, 0.384, 1.0);
-uniform vec4 tex6_color_3 : source_color = vec4(0.373, 0.424, 0.294, 1.0);
-uniform vec4 tex6_color_4 : source_color = vec4(0.392, 0.475, 0.255, 1.0);
+group_uniforms Visuals.Palette;
+uniform sampler2D palette_texture : source_color, filter_nearest;
+uniform sampler2D slot_index_texture : filter_nearest;
+uniform int slot_blend_modes[15];
 group_uniforms;
 
 group_uniforms Visuals.Vertex_Painting;
@@ -210,26 +189,83 @@ float get_texture_scale(int index) {
 	}
 }
 
-vec4 get_palette_color(int tex_idx, vec2 world_xz) {
-	float n = fbm(vec2(
-		world_xz.x * 0.08 + world_xz.y * 0.031 + world_pos.y * 0.02,
-		world_xz.y * 0.08 - world_xz.x * 0.023 + world_pos.y * 0.7));
-	n = smoothstep(0.0, 1.0, n);
 
-	vec4 c1, c2, c3, c4;
-	if (tex_idx == 0)      { c1=tex1_color_1; c2=tex1_color_2; c3=tex1_color_3; c4=tex1_color_4; }
-	else if (tex_idx == 1) { c1=tex2_color_1; c2=tex2_color_2; c3=tex2_color_3; c4=tex2_color_4; }
-	else if (tex_idx == 2) { c1=tex3_color_1; c2=tex3_color_2; c3=tex3_color_3; c4=tex3_color_4; }
-	else if (tex_idx == 3) { c1=tex4_color_1; c2=tex4_color_2; c3=tex4_color_3; c4=tex4_color_4; }
-	else if (tex_idx == 4) { c1=tex5_color_1; c2=tex5_color_2; c3=tex5_color_3; c4=tex5_color_4; }
-	else                   { c1=tex6_color_1; c2=tex6_color_2; c3=tex6_color_3; c4=tex6_color_4; }
-
-	// c1=lightest at n=0, c4=darkest at n=1
-	if (n < 0.33)      return mix(c1, c2, smoothstep(0.0,  0.33, n));
-	else if (n < 0.66) return mix(c2, c3, smoothstep(0.33, 0.66, n));
-	else               return mix(c3, c4, smoothstep(0.66, 1.0,  n));
+vec4 sample_palette_entry(int slot, int color_idx_in_slot) {
+	vec2 uv = vec2((float(color_idx_in_slot) + 0.5) / 16.0, (float(slot) + 0.5) / 15.0);
+	float palette_idx_norm = texture(slot_index_texture, uv).r;
+	int palette_idx = int(round(palette_idx_norm * 127.0));
+	return texture(palette_texture, vec2((float(palette_idx) + 0.5) / 128.0, 0.5));
 }
 
+vec4 get_palette_color(int tex_idx, vec2 world_xz) {
+	vec2 count_uv = vec2(0.5 / 16.0, (float(tex_idx) + 0.5) / 15.0);
+	int color_count = int(round(texture(slot_index_texture, count_uv).g * 16.0));
+
+	if (color_count <= 0)
+		return vec4(0.392, 0.471, 0.318, 1.0);
+	if (color_count == 1)
+		return sample_palette_entry(tex_idx, 0);
+
+	// Domain-warped noise — breaks up flat lines and blobby regularity
+	vec2 p = vec2(
+		world_xz.x * 0.06 + world_xz.y * 0.041 + world_pos.y * 0.06,
+		world_xz.y * 0.06 - world_xz.x * 0.037 + world_pos.y * 0.038);
+
+	// First warp pass — displaces the sample point so shapes aren't axis-aligned
+	vec2 warp = vec2(
+		fbm(p + vec2(1.7, 9.2)),
+		fbm(p + vec2(8.3, 2.8)));
+
+	float n = fbm(p + warp * 0.6);
+	n = smoothstep(0.0, 1.0, n);
+
+	int mode = slot_blend_modes[tex_idx];
+
+	if (mode == 1) {
+		// Retro: hard snap to nearest color
+		int idx = clamp(int(floor(n * float(color_count))), 0, color_count - 1);
+		return sample_palette_entry(tex_idx, idx);
+
+	} else if (mode == 2) {
+		// Dithered: hash grid threshold — uses XYZ to prevent streaking on walls
+		vec2 dither_coord = floor(vec2(
+			world_xz.x + world_pos.y * 0.7,
+			world_xz.y + world_pos.y * 1.3) * 8.0);
+		float dither = hash(dither_coord);
+		float pos = clamp(n * float(color_count - 1) + dither - 0.5, 0.0, float(color_count - 1));
+		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
+		int i1 = min(i0 + 1, color_count - 1);
+		return mix(sample_palette_entry(tex_idx, i0), sample_palette_entry(tex_idx, i1), fract(pos));
+
+	} else if (mode == 3) {
+		// Stipple: solid color bands with a checkerboard seam at each transition
+		float pos = n * float(color_count - 1);
+		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
+		int i1 = min(i0 + 1, color_count - 1);
+		float t = fract(pos);
+
+		float seam = 0.05; // width of the checker band on each side of the boundary
+		if (t < 0.5 - seam) {
+			return sample_palette_entry(tex_idx, i0);
+		} else if (t > 0.5 + seam) {
+			return sample_palette_entry(tex_idx, i1);
+		} else {
+			// Checkerboard zone — uses XYZ so it works on walls too
+			vec3 checker_coord = floor(vec3(world_xz.x, world_pos.y, world_xz.y) * 4.0);
+			float checker = mod(checker_coord.x + checker_coord.y + checker_coord.z, 2.0);
+			return checker > 0.5 ? sample_palette_entry(tex_idx, i1) : sample_palette_entry(tex_idx, i0);
+		}
+
+	} else {
+		// Gradient (0): smooth blend
+		float pos = n * float(color_count - 1);
+		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
+		int i1 = min(i0 + 1, color_count - 1);
+		float seg = 1.0 / float(color_count - 1);
+		float t = smoothstep(float(i0) * seg, float(i0 + 1) * seg, n);
+		return mix(sample_palette_entry(tex_idx, i0), sample_palette_entry(tex_idx, i1), t);
+	}
+}
 // Sample material by index with albedo tints and per-texture scaling applied
 vec4 sample_material_by_index(int index, vec2 base_uv) {
 	float scale = 1.0;
@@ -244,25 +280,19 @@ vec4 sample_material_by_index(int index, vec2 base_uv) {
 		case 3: result = texture(vc_tex_ra, uv) * get_palette_color(3, world_pos.xz); break;
 		case 4: result = texture(vc_tex_gr, uv) * get_palette_color(4, world_pos.xz); break;
 		case 5: result = texture(vc_tex_gg, uv) * get_palette_color(5, world_pos.xz); break;
-		case 6: result = texture(vc_tex_gb, uv); break;
-		case 7: result = texture(vc_tex_ga, uv); break;
-		case 8: result = texture(vc_tex_br, uv); break;
-		case 9: result = texture(vc_tex_bg, uv); break;
-		case 10: result = texture(vc_tex_bb, uv); break;
-		case 11: result = texture(vc_tex_ba, uv); break;
-		case 12: result = texture(vc_tex_ar, uv); break;
-		case 13: result = texture(vc_tex_ag, uv); break;
-		case 14: result = texture(vc_tex_ab, uv); break;
-		case 15: result = texture(vc_tex_aa, uv); break;  // VOID: fully transparent, no color contribution to blending
-		default: result = texture(vc_tex_rr, uv) * tex1_color_1; break;
+		case 6:  result = texture(vc_tex_gb, uv) * get_palette_color(6,  world_pos.xz); break;
+		case 7:  result = texture(vc_tex_ga, uv) * get_palette_color(7,  world_pos.xz); break;
+		case 8:  result = texture(vc_tex_br, uv) * get_palette_color(8,  world_pos.xz); break;
+		case 9:  result = texture(vc_tex_bg, uv) * get_palette_color(9,  world_pos.xz); break;
+		case 10: result = texture(vc_tex_bb, uv) * get_palette_color(10, world_pos.xz); break;
+		case 11: result = texture(vc_tex_ba, uv) * get_palette_color(11, world_pos.xz); break;
+		case 12: result = texture(vc_tex_ar, uv) * get_palette_color(12, world_pos.xz); break;
+		case 13: result = texture(vc_tex_ag, uv) * get_palette_color(13, world_pos.xz); break;
+		case 14: result = texture(vc_tex_ab, uv) * get_palette_color(14, world_pos.xz); break;
+		case 15: result = texture(vc_tex_aa, uv); break; // VOID: fully transparent, no color contribution to blending
+		default: result = texture(vc_tex_rr, uv) * get_palette_color(0, world_pos.xz); break;
 	}
 	return result;
-}
-
-// Sample wall material by index - uses unified texture pool (same as ground)
-// Walls now use the same 16 textures as floors via sample_material_by_index()
-vec4 sample_wall_by_index(int index, vec2 uv) {
-	return sample_material_by_index(index, uv);
 }
 
 void calculate_blend_weights(vec4 vc0, vec4 vc1, float sharpness, out float weights[16]) {
@@ -347,7 +377,7 @@ vec4 blend_wall_materials(vec2 uv, vec4 vc0, vec4 vc1, float sharpness) {
 	for (int i = 0; i < 16; i++) {
 		if (weights[i] > 0.01) {
 			// Use full 0-15 range - walls now use unified texture pool
-			wall_color += sample_wall_by_index(i, uv) * weights[i];
+			wall_color += sample_material_by_index(i, uv) * weights[i];
 			total_weight += weights[i];
 		}
 	}
@@ -544,9 +574,8 @@ void fragment() {
 
 		vec3 texture_x = wall_mat_x.rgb * tri_weights.x;
 		vec3 texture_z = wall_mat_z.rgb * tri_weights.z;
-		wall_color = texture_x + texture_z;
 
-		ALBEDO = texture_x + texture_z;
+ALBEDO = texture_x + texture_z;
 		ALPHA = wall_mat_x.a;
 	}
 

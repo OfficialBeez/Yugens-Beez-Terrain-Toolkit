@@ -29,8 +29,7 @@ var terrain_settings_data : Dictionary = {
 		"blend_mode": "OptionButton",
 		"extra_collision_layer": "OptionButton",
 		"noise_hmap": "EditorResourcePicker",
-		"global_noise_scale": "EditorSpinSlider",
-		"global_noise_strength": "EditorSpinSlider",
+		"collision_depth": "EditorSpinSlider",
 	},
 	"Vertex Painter Settings": {
 		"default_wall_texture": "OptionButton",
@@ -43,6 +42,8 @@ var terrain_settings_data : Dictionary = {
 		"use_cell_shading": "CheckBox",
 	},
 	"Grass Settings": {
+		"global_noise_scale": "EditorSpinSlider",
+		"global_noise_strength": "EditorSpinSlider",
 		"grass_subdivisions": "SpinBox",
 		"grass_size": "Vector2",
 		"grass_size_variation": "EditorSpinSlider",
@@ -302,8 +303,7 @@ func add_setting(p_params: Dictionary) -> void:
 				preset_button.set_custom_minimum_size(Vector2(100, 35))
 				
 				# Sync dropdown selection with current plugin.current_texture_preset
-				var terrain := MarchingSquaresTerrainPlugin.instance.current_terrain_node
-				var current_texture_preset = terrain.current_texture_preset if terrain else null
+				var current_texture_preset = plugin.current_texture_preset
 				if current_texture_preset == null:
 					preset_button.select(0)  # Select "None"
 				else:
@@ -490,9 +490,17 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 		"EditorSpinSlider":
 			var spin_slider := EditorSpinSlider.new()
 			spin_slider.set_flat(true)
-			spin_slider.set_min(0.005)
-			spin_slider.set_max(0.5 if setting == "wall_threshold" else 1.0)
-			spin_slider.set_step(0.01)
+			if setting == "wall_threshold":
+				spin_slider.set_min(0.005)
+				spin_slider.set_max(0.5)
+			elif setting == "collision_depth":
+				spin_slider.set_min(0.0)
+				spin_slider.set_max(1.0)
+				spin_slider.allow_greater = true
+			else:
+				spin_slider.set_min(0.005)
+				spin_slider.set_max(1.0)
+			spin_slider.set_step(0.1)
 			spin_slider.set_value(s_value if s_value != null else 0.0)
 			spin_slider.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
 			spin_slider.set_custom_minimum_size(Vector2(120, 25))

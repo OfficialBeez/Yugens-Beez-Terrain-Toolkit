@@ -1,31 +1,10 @@
 shader_type spatial;
 render_mode diffuse_toon, depth_draw_opaque;
 
-group_uniforms Visuals.Albedo;
-uniform vec3 tex1_color_1 : source_color = vec3(0.392, 0.471, 0.318);
-uniform vec3 tex1_color_2 : source_color = vec3(0.322, 0.482, 0.384);
-uniform vec3 tex1_color_3 : source_color = vec3(0.373, 0.424, 0.294);
-uniform vec3 tex1_color_4 : source_color = vec3(0.392, 0.475, 0.255);
-uniform vec3 tex2_color_1 : source_color = vec3(0.392, 0.471, 0.318);
-uniform vec3 tex2_color_2 : source_color = vec3(0.322, 0.482, 0.384);
-uniform vec3 tex2_color_3 : source_color = vec3(0.373, 0.424, 0.294);
-uniform vec3 tex2_color_4 : source_color = vec3(0.392, 0.475, 0.255);
-uniform vec3 tex3_color_1 : source_color = vec3(0.392, 0.471, 0.318);
-uniform vec3 tex3_color_2 : source_color = vec3(0.322, 0.482, 0.384);
-uniform vec3 tex3_color_3 : source_color = vec3(0.373, 0.424, 0.294);
-uniform vec3 tex3_color_4 : source_color = vec3(0.392, 0.475, 0.255);
-uniform vec3 tex4_color_1 : source_color = vec3(0.392, 0.471, 0.318);
-uniform vec3 tex4_color_2 : source_color = vec3(0.322, 0.482, 0.384);
-uniform vec3 tex4_color_3 : source_color = vec3(0.373, 0.424, 0.294);
-uniform vec3 tex4_color_4 : source_color = vec3(0.392, 0.475, 0.255);
-uniform vec3 tex5_color_1 : source_color = vec3(0.392, 0.471, 0.318);
-uniform vec3 tex5_color_2 : source_color = vec3(0.322, 0.482, 0.384);
-uniform vec3 tex5_color_3 : source_color = vec3(0.373, 0.424, 0.294);
-uniform vec3 tex5_color_4 : source_color = vec3(0.392, 0.475, 0.255);
-uniform vec3 tex6_color_1 : source_color = vec3(0.392, 0.471, 0.318);
-uniform vec3 tex6_color_2 : source_color = vec3(0.322, 0.482, 0.384);
-uniform vec3 tex6_color_3 : source_color = vec3(0.373, 0.424, 0.294);
-uniform vec3 tex6_color_4 : source_color = vec3(0.392, 0.475, 0.255);
+group_uniforms Visuals.Palette;
+uniform sampler2D palette_texture : source_color, filter_nearest;
+uniform sampler2D slot_index_texture : filter_nearest;
+uniform int slot_blend_modes[15];
 group_uniforms;
 
 group_uniforms Visuals.Textures;
@@ -90,8 +69,6 @@ group_uniforms;
 
 uniform float global_noise_scale = 0.08;
 uniform float global_noise_strength = 0.3;
-uniform float color_variation_scale : hint_range(0.005, 0.5, 0.005) = 0.08;
-uniform float color_variation_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
 
 varying vec3 model_origin;
 varying vec3 instance_color;
@@ -130,24 +107,16 @@ float fbm(vec2 p) {
 
 float directional_pulse(vec2 world_xz, vec2 dir, float t) {
 	float along = dot(world_xz, dir);
-
 	vec2 perp = vec2(-dir.y, dir.x);
 	float across = dot(world_xz, perp);
-
-	float ripple = sin(across * 0.25) * 2.0
-	             + sin(across * 0.11 + 1.3) * 1.2;
-
+	float ripple = sin(across * 0.25) * 2.0 + sin(across * 0.11 + 1.3) * 1.2;
 	along += ripple;
-
 	float period = 6.0;
 	float speed = wind_speed * 6.0;
 	float phase = (along - t * speed) / period;
 	float w = fract(phase);
-
 	float pulse = pow(smoothstep(0.55, 0.85, w) * (1.0 - smoothstep(0.85, 1.0, w)), 1.4);
-
 	float jitter = noise(world_xz * 0.05) * 0.3 + 0.7;
-
 	return pulse * jitter;
 }
 
@@ -166,15 +135,78 @@ float fbm_turbulent(vec2 p) {
 float turbulent_wind(vec2 world_xz, float t) {
 	vec2 uv_a = world_xz * 0.4 + vec2(t * wind_speed *  1.4, t * wind_speed * -0.9);
 	vec2 uv_b = world_xz * 0.7 + vec2(t * wind_speed * -1.1, t * wind_speed *  1.6);
-
 	float a = fbm_turbulent(uv_a);
 	float b = fbm_turbulent(uv_b);
 	float v = a * 0.6 + b * 0.4;
-
 	return (v - 0.5) * 1.6;
 }
 
 // ---------------- End of Wind -------------------------
+
+vec4 sample_palette_entry(int slot, int color_idx_in_slot) {
+	vec2 uv = vec2((float(color_idx_in_slot) + 0.5) / 16.0, (float(slot) + 0.5) / 15.0);
+	float palette_idx_norm = texture(slot_index_texture, uv).r;
+	int palette_idx = int(round(palette_idx_norm * 127.0));
+	return texture(palette_texture, vec2((float(palette_idx) + 0.5) / 128.0, 0.5));
+}
+
+vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
+	vec2 count_uv = vec2(0.5 / 16.0, (float(slot) + 0.5) / 15.0);
+	int color_count = int(round(texture(slot_index_texture, count_uv).g * 16.0));
+
+	if (color_count <= 0) return vec3(0.392, 0.471, 0.318);
+	if (color_count == 1) return sample_palette_entry(slot, 0).rgb;
+
+	// Same domain-warped noise as terrain shader
+	vec2 p = vec2(
+		world_xz.x * 0.06 + world_xz.y * 0.041 + world_y * 0.06,
+		world_xz.y * 0.06 - world_xz.x * 0.037 + world_y * 0.059);
+	vec2 warp = vec2(
+		fbm(p + vec2(1.7, 9.2)),
+		fbm(p + vec2(8.3, 2.8)));
+	float n = fbm(p + warp * 0.6);
+	n = smoothstep(0.0, 1.0, n);
+
+	int mode = slot_blend_modes[slot];
+
+	if (mode == 1) {
+		// Retro
+		int idx = clamp(int(floor(n * float(color_count))), 0, color_count - 1);
+		return sample_palette_entry(slot, idx).rgb;
+	} else if (mode == 2) {
+		// Dithered
+		vec2 dither_coord = floor(vec2(
+			world_xz.x + world_y * 0.7,
+			world_xz.y + world_y * 1.3) * 8.0);
+		float dither = hash(dither_coord);
+		float pos = clamp(n * float(color_count - 1) + dither - 0.5, 0.0, float(color_count - 1));
+		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
+		int i1 = min(i0 + 1, color_count - 1);
+		return mix(sample_palette_entry(slot, i0), sample_palette_entry(slot, i1), fract(pos)).rgb;
+	} else if (mode == 3) {
+		// Stipple
+		float pos = n * float(color_count - 1);
+		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
+		int i1 = min(i0 + 1, color_count - 1);
+		float t = fract(pos);
+		float seam = 0.08;
+		if (t < 0.5 - seam) return sample_palette_entry(slot, i0).rgb;
+		else if (t > 0.5 + seam) return sample_palette_entry(slot, i1).rgb;
+		else {
+			vec3 checker_coord = floor(vec3(world_xz.x, world_y, world_xz.y) * 12.0);
+			float checker = mod(checker_coord.x + checker_coord.y + checker_coord.z, 2.0);
+			return checker > 0.5 ? sample_palette_entry(slot, i1).rgb : sample_palette_entry(slot, i0).rgb;
+		}
+	} else {
+		// Gradient
+		float pos = n * float(color_count - 1);
+		int i0 = clamp(int(floor(pos)), 0, color_count - 1);
+		int i1 = min(i0 + 1, color_count - 1);
+		float seg = 1.0 / float(color_count - 1);
+		float t = smoothstep(float(i0) * seg, float(i0 + 1) * seg, n);
+		return mix(sample_palette_entry(slot, i0), sample_palette_entry(slot, i1), t).rgb;
+	}
+}
 
 void vertex() {
 	wind_color = 0.0;
@@ -219,19 +251,19 @@ void vertex() {
 			vec2 world_uv = world_pos.xz / tile_size + normalized_dir * TIME * wind_speed + phase;
 
 			float raw;
-		if (wind_mode == 0) {
-			raw = textureLod(wind_texture, world_uv, 0.0).r - 0.5;
-		} else if (wind_mode == 1) {
-			vec2 gust_uv = world_pos.xz / (tile_size * 0.7) + normalized_dir * TIME * wind_speed * 1.8 + phase;
-			float g = textureLod(wind_texture, gust_uv, 0.0).r;
-			g = pow(smoothstep(0.3, 0.85, g), 1.8);
-			raw = g - 0.4;
-		} else if (wind_mode == 2) {
-			float p = directional_pulse(world_pos.xz, normalized_dir, TIME);
-			raw = p - 0.15;
-		} else {
-			raw = turbulent_wind(world_pos.xz, TIME);
-		}
+			if (wind_mode == 0) {
+				raw = textureLod(wind_texture, world_uv, 0.0).r - 0.5;
+			} else if (wind_mode == 1) {
+				vec2 gust_uv = world_pos.xz / (tile_size * 0.7) + normalized_dir * TIME * wind_speed * 1.8 + phase;
+				float g = textureLod(wind_texture, gust_uv, 0.0).r;
+				g = pow(smoothstep(0.3, 0.85, g), 1.8);
+				raw = g - 0.4;
+			} else if (wind_mode == 2) {
+				float p = directional_pulse(world_pos.xz, normalized_dir, TIME);
+				raw = p - 0.15;
+			} else {
+				raw = turbulent_wind(world_pos.xz, TIME);
+			}
 
 			vec2 vert_space_dir = (inverse(MODEL_MATRIX) * vec4(normalized_dir.x, 0.0, normalized_dir.y, 0.0)).xz;
 			vert_space_dir = normalize(vert_space_dir);
@@ -284,71 +316,34 @@ void vertex() {
 	vertex_normal = world_normal;
 }
 
-
 void fragment() {
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
 	vec4 grass_tex = texture(grass_texture_1, UV);
-	
-	float n = fbm(vec2(
-		world_origin.x * color_variation_scale + world_origin.z * 0.031,
-		 world_origin.z * color_variation_scale - world_origin.x * 0.023
-	));
-	n = smoothstep(0.0, 1.0, n);
-	// Strength blends between flat mid-gradient (0.5) and full noise variation
-	n = mix(0.5, n, color_variation_strength);
-	
-	vec3 base_c1, base_c2, base_c3, base_c4, base_c5, base_c6;
 
-	if (n < 0.33) {
-		base_c1 = mix(tex1_color_1.rgb, tex1_color_2.rgb, smoothstep(0.0, 0.33, n));
-		base_c2 = mix(tex2_color_1.rgb, tex2_color_2.rgb, smoothstep(0.0, 0.33, n));
-		base_c3 = mix(tex3_color_1.rgb, tex3_color_2.rgb, smoothstep(0.0, 0.33, n));
-		base_c4 = mix(tex4_color_1.rgb, tex4_color_2.rgb, smoothstep(0.0, 0.33, n));
-		base_c5 = mix(tex5_color_1.rgb, tex5_color_2.rgb, smoothstep(0.0, 0.33, n));
-		base_c6 = mix(tex6_color_1.rgb, tex6_color_2.rgb, smoothstep(0.0, 0.33, n));
-	} else if (n < 0.66) {
-		base_c1 = mix(tex1_color_2.rgb, tex1_color_3.rgb, smoothstep(0.33, 0.66, n));
-		base_c2 = mix(tex2_color_2.rgb, tex2_color_3.rgb, smoothstep(0.33, 0.66, n));
-		base_c3 = mix(tex3_color_2.rgb, tex3_color_3.rgb, smoothstep(0.33, 0.66, n));
-		base_c4 = mix(tex4_color_2.rgb, tex4_color_3.rgb, smoothstep(0.33, 0.66, n));
-		base_c5 = mix(tex5_color_2.rgb, tex5_color_3.rgb, smoothstep(0.33, 0.66, n));
-		base_c6 = mix(tex6_color_2.rgb, tex6_color_3.rgb, smoothstep(0.33, 0.66, n));
-	} else {
-		base_c1 = mix(tex1_color_3.rgb, tex1_color_4.rgb, smoothstep(0.66, 1.0, n));
-		base_c2 = mix(tex2_color_3.rgb, tex2_color_4.rgb, smoothstep(0.66, 1.0, n));
-		base_c3 = mix(tex3_color_3.rgb, tex3_color_4.rgb, smoothstep(0.66, 1.0, n));
-		base_c4 = mix(tex4_color_3.rgb, tex4_color_4.rgb, smoothstep(0.66, 1.0, n));
-		base_c5 = mix(tex5_color_3.rgb, tex5_color_4.rgb, smoothstep(0.66, 1.0, n));
-		base_c6 = mix(tex6_color_3.rgb, tex6_color_4.rgb, smoothstep(0.66, 1.0, n));
-	}
-
-	vec3 grass_color = use_base_color_1 ? base_c1 : instance_color * base_c1;
-
+	vec3 grass_color;
 	int tex_id = 1;
 	if (instance_sprite_id > 0.9) {
-		grass_color = use_base_color_6 ? base_c6 : instance_color * base_c6;
+		grass_color = use_base_color_6 ? get_grass_palette_color(5, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(5, world_origin.xz, world_origin.y);
 		tex_id = 6;
 	} else if (instance_sprite_id > 0.7) {
-		grass_color = use_base_color_5 ? base_c5 : instance_color * base_c5;
+		grass_color = use_base_color_5 ? get_grass_palette_color(4, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(4, world_origin.xz, world_origin.y);
 		tex_id = 5;
 	} else if (instance_sprite_id > 0.5) {
-		grass_color = use_base_color_4 ? base_c4 : instance_color * base_c4;
+		grass_color = use_base_color_4 ? get_grass_palette_color(3, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(3, world_origin.xz, world_origin.y);
 		tex_id = 4;
 	} else if (instance_sprite_id > 0.3) {
-		grass_color = use_base_color_3 ? base_c3 : instance_color * base_c3;
+		grass_color = use_base_color_3 ? get_grass_palette_color(2, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(2, world_origin.xz, world_origin.y);
 		tex_id = 3;
 	} else if (instance_sprite_id > 0.1) {
-		grass_color = use_base_color_2 ? base_c2 : instance_color * base_c2;
+		grass_color = use_base_color_2 ? get_grass_palette_color(1, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(1, world_origin.xz, world_origin.y);
 		tex_id = 2;
+	} else {
+		grass_color = use_base_color_1 ? get_grass_palette_color(0, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(0, world_origin.xz, world_origin.y);
 	}
 
-	// Wind tip color effect
-	// UV.y approaches 1.0 at the tip of the blade
-	// wind_color is high during strong gusts
-	// Combined: tips get tinted toward wind_tip_color only when wind is blowing
 	if (wind_tip_strength > 0.0) {
-		float tip_mask = smoothstep(0.4, 1.0, 1.0 - UV.y);          // only upper half of blade
-		float gust_mask = smoothstep(0.1, 0.7, wind_color);   // only during strong wind
+		float tip_mask = smoothstep(0.4, 1.0, 1.0 - UV.y);
+		float gust_mask = smoothstep(0.1, 0.7, wind_color);
 		float tip_factor = tip_mask * gust_mask * wind_tip_strength;
 		grass_color = mix(grass_color, wind_tip_color, tip_factor);
 	}

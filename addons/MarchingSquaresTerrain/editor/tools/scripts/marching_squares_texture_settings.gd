@@ -13,41 +13,35 @@ const VAR_NAMES : Array[Dictionary] = [
 		"tex_var": "texture_1",
 		"scale_var": "texture_scale_1",
 		"sprite_var": "grass_sprite_tex_1",
-		"palette_colors": ["tex1_color_1", "tex1_color_2", "tex1_color_3", "tex1_color_4"],
 	},
 	{
 		"tex_var": "texture_2",
 		"scale_var": "texture_scale_2",
 		"sprite_var": "grass_sprite_tex_2",
-		"palette_colors": ["tex2_color_1", "tex2_color_2", "tex2_color_3", "tex2_color_4"],
 		"use_grass_var": "tex2_has_grass",
 	},
 	{
 		"tex_var": "texture_3",
 		"scale_var": "texture_scale_3",
 		"sprite_var": "grass_sprite_tex_3",
-		"palette_colors": ["tex3_color_1", "tex3_color_2", "tex3_color_3", "tex3_color_4"],
 		"use_grass_var": "tex3_has_grass",
 	},
 	{
 		"tex_var": "texture_4",
 		"scale_var": "texture_scale_4",
 		"sprite_var": "grass_sprite_tex_4",
-		"palette_colors": ["tex4_color_1", "tex4_color_2", "tex4_color_3", "tex4_color_4"],
 		"use_grass_var": "tex4_has_grass",
 	},
 	{
 		"tex_var": "texture_5",
 		"scale_var": "texture_scale_5",
 		"sprite_var": "grass_sprite_tex_5",
-		"palette_colors": ["tex5_color_1", "tex5_color_2", "tex5_color_3", "tex5_color_4"],
 		"use_grass_var": "tex5_has_grass",
 	},
 	{
 		"tex_var": "texture_6",
 		"scale_var": "texture_scale_6",
 		"sprite_var": "grass_sprite_tex_6",
-		"palette_colors": ["tex6_color_1", "tex6_color_2", "tex6_color_3", "tex6_color_4"],
 		"use_grass_var": "tex6_has_grass",
 	},
 	{
@@ -149,11 +143,11 @@ func add_texture_settings() -> void:
 			scale_slider.min_value = 0.1
 			scale_slider.max_value = 40.0
 			scale_slider.step = 0.1
-			scale_slider.value = scale_value
 			scale_slider.set_custom_minimum_size(Vector2(80, 20))
-			scale_slider.value_changed.connect(func(val): _on_texture_setting_changed(scale_var_name, val))
 			scale_slider.drag_ended.connect(func(val): _on_slider_drag_ended(val))
 			c_cont_2.add_child(scale_slider, true)
+			scale_slider.set_value_no_signal(scale_value)
+			scale_slider.value_changed.connect(func(val): _on_texture_setting_changed(scale_var_name, val))
 			scale_hbox.add_child(c_cont_2, true)
 			
 			var scale_value_label := Label.new()
@@ -163,6 +157,9 @@ func add_texture_settings() -> void:
 			scale_hbox.add_child(scale_value_label)
 			
 			vbox.add_child(scale_hbox, true)
+		
+		# Palette UI for ALL slots
+		_build_palette_ui(vbox, terrain, i)
 		
 		if i <= 5:
 			# Grass sprite picker
@@ -176,29 +173,6 @@ func add_texture_settings() -> void:
 			editor_r_picker2.resource_changed.connect(func(resource): _on_texture_setting_changed(VAR_NAMES[i].get("sprite_var"), resource))
 			editor_r_picker2.set_custom_minimum_size(Vector2(100, 25))
 			vbox.add_child(editor_r_picker2, true)
-			
-			# 4 palette color pickers
-			var palette_colors : Array = VAR_NAMES[i].get("palette_colors")
-			for p_idx in range(4):
-				var p_var_name : String = palette_colors[p_idx]
-				var p_color : Color = terrain.get(p_var_name) if terrain.get(p_var_name) != null else Color.WHITE
-				
-				var p_hbox := HBoxContainer.new()
-				p_hbox.set_custom_minimum_size(Vector2(150, 25))
-				
-				var p_label := Label.new()
-				p_label.text = "Color " + str(p_idx + 1) + ":"
-				p_label.set_custom_minimum_size(Vector2(50, 20))
-				p_hbox.add_child(p_label, true)
-				
-				var p_btn := ColorPickerButton.new()
-				p_btn.color = p_color
-				p_btn.color_changed.connect(func(color, vn = p_var_name): _on_texture_setting_changed(vn, color))
-				p_btn.set_custom_minimum_size(Vector2(95, 25))
-				p_hbox.add_child(p_btn, true)
-				
-				vbox.add_child(p_hbox, true)
-		
 		if i >= 1 and i <= 5:
 			# Has grass checkbox
 			var use_grass_var : bool = terrain.get(VAR_NAMES[i].get("use_grass_var"))
@@ -228,6 +202,89 @@ func add_texture_settings() -> void:
 
 func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> void:
 	emit_signal("texture_setting_changed", p_setting_name, p_value)
+
+
+func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slot: int) -> void:
+	# Blend mode dropdown
+	var blend_hbox := HBoxContainer.new()
+	var blend_label := Label.new()
+	blend_label.text = "Blend:"
+	blend_label.set_custom_minimum_size(Vector2(50, 20))
+	blend_hbox.add_child(blend_label)
+	
+	var blend_opt := OptionButton.new()
+	blend_opt.add_item("Gradient", 0)
+	blend_opt.add_item("Retro", 1)
+	blend_opt.add_item("Dithered", 2)
+	blend_opt.add_item("Stippled", 3)
+	blend_opt.selected = terrain.slot_blend_modes[slot]
+	blend_opt.set_custom_minimum_size(Vector2(95, 25))
+	blend_opt.item_selected.connect(func(idx):
+		terrain.slot_blend_modes[slot] = idx
+		terrain._push_slot_blend_modes()
+		terrain.save_to_preset()
+	)
+	blend_hbox.add_child(blend_opt)
+	vbox.add_child(blend_hbox, true)
+	
+	# Color rows
+	var slot_indices : Array = terrain.slot_color_indices[slot]
+	for ci in range(slot_indices.size()):
+		var palette_idx : int = slot_indices[ci]
+		var c_hbox := HBoxContainer.new()
+		c_hbox.set_custom_minimum_size(Vector2(150, 25))
+		
+		var c_label := Label.new()
+		c_label.text = "Color " + str(ci + 1) + ":"
+		c_label.set_custom_minimum_size(Vector2(50, 20))
+		c_hbox.add_child(c_label)
+		
+		var c_btn := ColorPickerButton.new()
+		c_btn.color = terrain.palette_colors[palette_idx]
+		c_btn.set_custom_minimum_size(Vector2(65, 25))
+		c_btn.color_changed.connect(func(new_color, pidx = palette_idx):
+			terrain.palette_colors[pidx] = new_color
+			terrain._rebuild_palette_texture()
+			terrain.save_to_preset()
+		)
+		c_hbox.add_child(c_btn)
+		
+		var remove_btn := Button.new()
+		remove_btn.text = "X"
+		remove_btn.set_custom_minimum_size(Vector2(25, 25))
+		remove_btn.pressed.connect(func(s = slot, ci_idx = ci):
+			terrain.slot_color_indices[s].remove_at(ci_idx)
+			terrain._rebuild_slot_index_texture()
+			terrain.save_to_preset()
+			add_texture_settings()
+		)
+		c_hbox.add_child(remove_btn)
+		vbox.add_child(c_hbox, true)
+	
+	# Add Color button
+	var add_btn := Button.new()
+	add_btn.text = "+ Add Color"
+	add_btn.set_custom_minimum_size(Vector2(150, 25))
+	add_btn.pressed.connect(func(s = slot):
+		# Find first unused palette index
+		var used : Array = []
+		for si in range(15):
+			for idx in terrain.slot_color_indices[si]:
+				used.append(idx)
+		var next_idx := 0
+		while next_idx < 128 and next_idx in used:
+			next_idx += 1
+		if next_idx >= 128:
+			push_error("[MST] Palette is full (128 colors max)")
+			return
+		terrain.palette_colors[next_idx] = Color("647851ff")
+		terrain.slot_color_indices[s].append(next_idx)
+		terrain._rebuild_palette_texture()
+		terrain._rebuild_slot_index_texture()
+		terrain.save_to_preset()
+		add_texture_settings()
+	)
+	vbox.add_child(add_btn, true)
 
 
 func _on_slider_drag_ended(ended: bool) -> void:

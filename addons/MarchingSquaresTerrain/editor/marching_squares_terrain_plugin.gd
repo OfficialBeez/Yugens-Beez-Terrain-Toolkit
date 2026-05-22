@@ -83,7 +83,7 @@ var falloff : bool = true
 var should_mask_grass : bool = false
 
 # Currently selected preset for vertex textures (DOES change the global terrain)
-var current_texture_preset : MarchingSquaresTexturePreset = EMPTY_TEXTURE_PRESET.duplicate():
+var current_texture_preset : MarchingSquaresTexturePreset = EMPTY_TEXTURE_PRESET:
 	set(value):
 		current_texture_preset = value
 		current_quick_paint = null
@@ -1309,28 +1309,8 @@ func _set_new_textures(_preset: MarchingSquaresTexturePreset) -> void:
 							current_terrain_node.grass_sprite_tex_5 = tex
 						5:
 							current_terrain_node.grass_sprite_tex_6 = tex
-			3: # grass_colors
-				var c := _preset.new_textures.grass_colors
-				if c.size() >= 24:
-					current_terrain_node.tex1_color_1 = c[0];  current_terrain_node.tex1_color_2 = c[1]
-					current_terrain_node.tex1_color_3 = c[2];  current_terrain_node.tex1_color_4 = c[3]
-					current_terrain_node.tex2_color_1 = c[4];  current_terrain_node.tex2_color_2 = c[5]
-					current_terrain_node.tex2_color_3 = c[6];  current_terrain_node.tex2_color_4 = c[7]
-					current_terrain_node.tex3_color_1 = c[8];  current_terrain_node.tex3_color_2 = c[9]
-					current_terrain_node.tex3_color_3 = c[10]; current_terrain_node.tex3_color_4 = c[11]
-					current_terrain_node.tex4_color_1 = c[12]; current_terrain_node.tex4_color_2 = c[13]
-					current_terrain_node.tex4_color_3 = c[14]; current_terrain_node.tex4_color_4 = c[15]
-					current_terrain_node.tex5_color_1 = c[16]; current_terrain_node.tex5_color_2 = c[17]
-					current_terrain_node.tex5_color_3 = c[18]; current_terrain_node.tex5_color_4 = c[19]
-					current_terrain_node.tex6_color_1 = c[20]; current_terrain_node.tex6_color_2 = c[21]
-					current_terrain_node.tex6_color_3 = c[22]; current_terrain_node.tex6_color_4 = c[23]
-				elif c.size() >= 6: # legacy preset with 6 colors — map to color_1 slots only
-					current_terrain_node.tex1_color_1 = c[0]
-					current_terrain_node.tex2_color_1 = c[1]
-					current_terrain_node.tex3_color_1 = c[2]
-					current_terrain_node.tex4_color_1 = c[3]
-					current_terrain_node.tex5_color_1 = c[4]
-					current_terrain_node.tex6_color_1 = c[5]
+			3: # grass_colors (palette system)
+				current_terrain_node.load_from_preset(_preset)
 			4: # has_grass
 				for i_has_grass in range(_preset.new_textures.has_grass.size()):
 					var val : bool = _preset.new_textures.has_grass[i_has_grass]
