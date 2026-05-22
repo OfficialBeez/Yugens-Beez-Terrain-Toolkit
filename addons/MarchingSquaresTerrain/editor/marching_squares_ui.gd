@@ -37,7 +37,7 @@ const TEXTURE_SCALE_PROPERTIES := [
 
 var plugin : MarchingSquaresTerrainPlugin
 var _terrain_snapshot : MarchingSquaresTexturePreset = null
-var _preset_save_timer : Timer = null
+var _preset_save_timer : Timer
 var toolbar : TOOLBAR
 var tool_attributes : TOOL_ATTRIBUTES
 var texture_settings : TEXTURE_SETTINGS
@@ -378,8 +378,6 @@ func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 
 
 func _queue_preset_save() -> void:
-	if _preset_save_timer == null:
-		return
 	_preset_save_timer.start()
 
 
