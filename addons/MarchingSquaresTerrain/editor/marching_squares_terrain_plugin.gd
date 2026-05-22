@@ -469,7 +469,6 @@ func handle_mouse(camera: Camera3D, event: InputEvent) -> int:
 				if brush_size < 1.0 * size_scale_factor:
 					brush_size = 1.0 * size_scale_factor
 				gizmo_plugin.trigger_redraw(terrain)
-			ui.tool_attributes.show_tool_attributes(ui.active_tool)
 			return EditorPlugin.AFTER_GUI_INPUT_STOP
 		
 		if draw_area_hovered and event is InputEventMouseMotion:

@@ -36,6 +36,7 @@ const TEXTURE_SCALE_PROPERTIES := [
 
 var plugin : MarchingSquaresTerrainPlugin
 var _terrain_snapshot : MarchingSquaresTexturePreset = null
+var _preset_save_timer : Timer = null
 var toolbar : TOOLBAR
 var tool_attributes : TOOL_ATTRIBUTES
 var texture_settings : TEXTURE_SETTINGS
@@ -71,6 +72,12 @@ func _deferred_enter_tree() -> void:
 	texture_settings.texture_setting_changed.connect(_on_texture_setting_changed)
 	texture_settings.plugin = plugin
 	texture_settings.hide()
+
+	_preset_save_timer = Timer.new()
+	_preset_save_timer.one_shot = true
+	_preset_save_timer.wait_time = 0.2
+	_preset_save_timer.timeout.connect(_flush_preset_save)
+	add_child(_preset_save_timer)
 	
 	plugin.add_control_to_container(EditorPlugin.CONTAINER_SPATIAL_EDITOR_SIDE_LEFT, toolbar)
 	plugin.add_control_to_container(EditorPlugin.CONTAINER_SPATIAL_EDITOR_BOTTOM, tool_attributes)
@@ -365,7 +372,20 @@ func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		if p_value is float or p_value is int:
 			terrain.set(p_setting_name, float(p_value))
 	
-	terrain.save_to_preset()
+	_queue_preset_save()
+
+
+func _queue_preset_save() -> void:
+	if _preset_save_timer == null:
+		_flush_preset_save()
+		return
+	_preset_save_timer.start()
+
+
+func _flush_preset_save() -> void:
+	if not plugin or not plugin.current_terrain_node:
+		return
+	plugin.current_terrain_node.save_to_preset()
 
 
 #endregion
