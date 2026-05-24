@@ -311,6 +311,12 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"global_noise_scale":
 			if p_value is float:
 				terrain.global_noise_scale = p_value
+		"global_noise_octaves":
+			if p_value is int or p_value is float:
+				terrain.global_noise_octaves = int(p_value)
+		"global_noise_scroll":
+			if p_value is bool:
+				terrain.global_noise_scroll = p_value
 		"wind_mode":
 			if p_value is int:
 				terrain.wind_mode = p_value

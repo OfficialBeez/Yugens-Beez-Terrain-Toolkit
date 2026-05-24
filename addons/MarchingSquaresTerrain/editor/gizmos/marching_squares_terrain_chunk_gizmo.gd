@@ -9,6 +9,9 @@ func _redraw():
 	clear()
 	
 	var terrain : MarchingSquaresTerrainChunk = get_node_3d()
+	# height_map can be empty while a chunk is initializing or after load errors.
+	if terrain.height_map.is_empty():
+		return
 	var dx := (terrain.dimensions.x - 1) * terrain.cell_size.x
 	var dz := (terrain.dimensions.z - 1) * terrain.cell_size.y
 	
@@ -22,7 +25,11 @@ func _redraw():
 	var corners := PackedVector3Array()
 	var ids := PackedInt32Array()
 	for z in range(terrain.dimensions.z):
+		if z < 0 or z >= terrain.height_map.size():
+			continue
 		for x in range(terrain.dimensions.x):
+			if x < 0 or x >= terrain.height_map[z].size():
+				continue
 			var y = terrain.height_map[z][x]
 			corners.append(Vector3(x * terrain.cell_size.x, y, z * terrain.cell_size.y))
 			ids.append(z*terrain.dimensions.x + x)
@@ -35,15 +42,23 @@ func _get_handle_name(handle_id: int, secondary: bool) -> String:
 
 func _get_handle_value(handle_id: int, secondary: bool) -> Variant:
 	var terrain: MarchingSquaresTerrainChunk = get_node_3d()
-	var z = handle_id / terrain.dimensions.z
-	var x = handle_id % terrain.dimensions.z
-	return terrain.height_map[z][x];
+	if terrain.height_map.is_empty():
+		return 0.0
+	var z = handle_id / terrain.dimensions.x
+	var x = handle_id % terrain.dimensions.x
+	if z < 0 or z >= terrain.height_map.size() or x < 0 or x >= terrain.height_map[z].size():
+		return 0.0
+	return terrain.height_map[z][x]
 
 
 func _commit_handle(handle_id: int, secondary: bool, restore: Variant, cancel: bool) -> void:
 	var terrain: MarchingSquaresTerrainChunk = get_node_3d()
-	var z = handle_id / terrain.dimensions.z
-	var x = handle_id % terrain.dimensions.z
+	if terrain.height_map.is_empty():
+		return
+	var z = handle_id / terrain.dimensions.x
+	var x = handle_id % terrain.dimensions.x
+	if z < 0 or z >= terrain.height_map.size() or x < 0 or x >= terrain.height_map[z].size():
+		return
 	
 	if cancel:
 		terrain.height_map[z][x] = restore
@@ -62,8 +77,12 @@ func _commit_handle(handle_id: int, secondary: bool, restore: Variant, cancel: b
 
 
 func move_terrain_point(terrain: MarchingSquaresTerrainChunk, handle_id: int, height: float):
-	var z = handle_id / terrain.dimensions.z
-	var x = handle_id % terrain.dimensions.z
+	if terrain.height_map.is_empty():
+		return
+	var z = handle_id / terrain.dimensions.x
+	var x = handle_id % terrain.dimensions.x
+	if z < 0 or z >= terrain.height_map.size() or x < 0 or x >= terrain.height_map[z].size():
+		return
 	terrain.height_map[z][x] = height
 	terrain.mark_dirty()
 	
@@ -84,8 +103,12 @@ func notify_needs_update(terrain: MarchingSquaresTerrainChunk, z: int, x: int):
 
 func _set_handle(handle_id: int, secondary: bool, camera: Camera3D, screen_pos: Vector2) -> void:
 	var terrain: MarchingSquaresTerrainChunk = get_node_3d()
-	var z = handle_id / terrain.dimensions.z
-	var x = handle_id % terrain.dimensions.z
+	if terrain.height_map.is_empty():
+		return
+	var z = handle_id / terrain.dimensions.x
+	var x = handle_id % terrain.dimensions.x
+	if z < 0 or z >= terrain.height_map.size() or x < 0 or x >= terrain.height_map[z].size():
+		return
 	var y = terrain.height_map[z][x]
 	# Get handle position
 	var handle_position = terrain.to_global(Vector3(x * terrain.cell_size.x, y, z * terrain.cell_size.y))
@@ -101,6 +124,8 @@ func _set_handle(handle_id: int, secondary: bool, camera: Camera3D, screen_pos: 
 	
 	if intersection:
 		intersection = terrain.to_local(intersection)
+		if z < 0 or z >= terrain.height_map.size() or x < 0 or x >= terrain.height_map[z].size():
+			return
 		terrain.height_map[z][x] = intersection.y
 		terrain.mark_dirty()
 		terrain.update_gizmos()

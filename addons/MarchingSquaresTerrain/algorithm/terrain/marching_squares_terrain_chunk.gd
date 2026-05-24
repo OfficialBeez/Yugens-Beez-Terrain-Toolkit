@@ -2,6 +2,9 @@
 extends MeshInstance3D
 class_name MarchingSquaresTerrainChunk
 
+# Explicit preloads avoid tool-script class resolution issues.
+const MSTVertexColorHelper := preload("res://addons/MarchingSquaresTerrain/algorithm/terrain/marching_squares_terrain_vertex_color_helper.gd")
+const MSTTerrainCell := preload("res://addons/MarchingSquaresTerrain/algorithm/terrain/marching_squares_terrain_cell.gd")
 
 enum Mode {CUBIC, POLYHEDRON, ROUNDED_POLYHEDRON, SEMI_ROUND, SPHERICAL}
 
@@ -344,8 +347,8 @@ func generate_terrain_cells(use_threads: bool):
 				"is_floor": [],
 			}
 			
-			var color_helper := MarchingSquaresTerrainVertexColorHelper.new()
-			var cell := MarchingSquaresTerrainCell.new(self, color_helper, height_map[z][x], height_map[z][x+1], height_map[z+1][x], height_map[z+1][x+1], merge_threshold)
+			var color_helper := MSTVertexColorHelper.new()
+			var cell := MSTTerrainCell.new(self, color_helper, height_map[z][x], height_map[z][x+1], height_map[z+1][x], height_map[z+1][x+1], merge_threshold)
 			color_helper.chunk = self
 			color_helper.cell = cell
 			

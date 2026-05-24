@@ -455,46 +455,40 @@ static func _delete_chunk_directory(chunk_dir: String) -> void:
 
 #region color conversion helpers
 
-## Convert Color pair to texture index (0-15).
-## Uses the 4×4 vertex color channel encoding system.
+## Convert Color pair to texture index (0-255).
+## Supports both legacy 4×4 channel encoding (0-15) and the new byte encoding.
 static func _colors_to_texture_idx(c0: Color, c1: Color) -> int:
-	var c0_idx := 0
-	var c0_max := c0.r
-	if c0.g > c0_max: c0_max = c0.g; c0_idx = 1
-	if c0.b > c0_max: c0_max = c0.b; c0_idx = 2
-	if c0.a > c0_max: c0_idx = 3
+	# Legacy one-hot encoding (two Colors, each choosing among RGBA -> 16 textures)
+	var c0_sum = c0.r + c0.g + c0.b + c0.a
+	var c1_sum = c1.r + c1.g + c1.b + c1.a
+	var c0_max = max(max(c0.r, c0.g), max(c0.b, c0.a))
+	var c1_max = max(max(c1.r, c1.g), max(c1.b, c1.a))
+	var looks_legacy: bool = (abs(c0_sum - 1.0) < 0.01 and abs(c1_sum - 1.0) < 0.01 and c0_max > 0.99 and c1_max > 0.99)
+	if looks_legacy:
+		var c0_idx = 0
+		var c0_m = c0.r
+		if c0.g > c0_m: c0_m = c0.g; c0_idx = 1
+		if c0.b > c0_m: c0_m = c0.b; c0_idx = 2
+		if c0.a > c0_m: c0_idx = 3
+		
+		var c1_idx = 0
+		var c1_m = c1.r
+		if c1.g > c1_m: c1_m = c1.g; c1_idx = 1
+		if c1.b > c1_m: c1_m = c1.b; c1_idx = 2
+		if c1.a > c1_m: c1_idx = 3
+		
+		return c0_idx * 4 + c1_idx
 	
-	var c1_idx := 0
-	var c1_max := c1.r
-	if c1.g > c1_max: c1_max = c1.g; c1_idx = 1
-	if c1.b > c1_max: c1_max = c1.b; c1_idx = 2
-	if c1.a > c1_max: c1_idx = 3
-	
-	return c0_idx * 4 + c1_idx
+	# New encoding: store texture index in c0.r (0..1 mapped to 0..255)
+	return clampi(int(round(clampf(c0.r, 0.0, 1.0) * 255.0)), 0, 255)
 
 
-## Convert texture index (0-15) to Color pair.
-## Reverses the encoding: index / 4 = c0 channel, index % 4 = c1 channel.
+## Convert texture index (0-255) to Color pair.
+## New encoding: idx stored in c0.r (0..1 mapped to 0..255). c1 is unused.
 static func _texture_idx_to_colors(idx: int) -> Array:
-	var c0 := Color(0, 0, 0, 0)
+	idx = clampi(idx, 0, 255)
+	var c0 := Color(float(idx) / 255.0, 0, 0, 0)
 	var c1 := Color(0, 0, 0, 0)
-	@warning_ignore_start("integer_division") 
-	var c0_ch := idx / 4
-	var c1_ch := idx % 4
-	@warning_ignore_restore("integer_division")
-	
-	match c0_ch:
-		0: c0.r = 1.0
-		1: c0.g = 1.0
-		2: c0.b = 1.0
-		3: c0.a = 1.0
-	
-	match c1_ch:
-		0: c1.r = 1.0
-		1: c1.g = 1.0
-		2: c1.b = 1.0
-		3: c1.a = 1.0
-	
 	return [c0, c1]
 
 #endregion

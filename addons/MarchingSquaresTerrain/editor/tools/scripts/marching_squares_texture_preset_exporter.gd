@@ -42,6 +42,7 @@ func _create_texture_export_dialog() -> void:
 
 
 func _export_to_texture_preset() -> void:
+	MarchingSquaresTerrainPlugin._ensure_texture_names_resource(TEXTURE_NAMES)
 	texture_preset_data = _get_current_texture_data()
 	
 	filename_input.text = "new_texture_preset"
@@ -92,7 +93,13 @@ func _save_preset(path: String) -> void:
 	
 	new_tex_preset.preset_name = filename_input.text
 	new_tex_preset.new_textures = texture_preset_data
-	new_tex_preset.new_tex_names = TEXTURE_NAMES.duplicate()
+	
+	# Copy per-slot names from the currently active preset (if present) so names persist.
+	var src_names : MarchingSquaresTextureNames = TEXTURE_NAMES
+	if current_terrain_node and current_terrain_node.current_texture_preset and current_terrain_node.current_texture_preset.new_tex_names:
+		src_names = current_terrain_node.current_texture_preset.new_tex_names
+	MarchingSquaresTerrainPlugin._ensure_texture_names_resource(src_names)
+	new_tex_preset.new_tex_names = src_names.duplicate(true)
 	
 	var save_error := ResourceSaver.save(new_tex_preset, path)
 	if save_error == OK:

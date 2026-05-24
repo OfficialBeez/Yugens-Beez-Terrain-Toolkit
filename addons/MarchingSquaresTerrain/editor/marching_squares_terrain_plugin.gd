@@ -5,14 +5,52 @@ class_name MarchingSquaresTerrainPlugin
 
 static var instance : MarchingSquaresTerrainPlugin
 
+
+const MAX_TEXTURE_SLOTS := 256
+
+
+static func _ensure_texture_names_resource(res: Resource) -> void:
+	if res == null:
+		return
+	var names := res.get("texture_names")
+	if not (names is Array):
+		names = []
+	# Seed defaults if empty.
+	if names.is_empty():
+		names = [
+			"Base Grass", "Texture 2 (g)", "Texture 3 (g)", "Texture 4 (g)",
+			"Texture 5 (g)", "Texture 6 (g)", "Texture 7", "Texture 8",
+			"Texture 9", "Texture 10", "Texture 11", "Texture 12",
+			"Texture 13", "Texture 14", "Texture 15", "Void",
+		]
+	# Extend/truncate to MAX_TEXTURE_SLOTS.
+	if names.size() < MAX_TEXTURE_SLOTS:
+		for i in range(names.size(), MAX_TEXTURE_SLOTS):
+			names.append("Texture %d" % (i + 1))
+	elif names.size() > MAX_TEXTURE_SLOTS:
+		names.resize(MAX_TEXTURE_SLOTS)
+
+	# Keep the legacy void slot name stable/obvious.
+	# (Void is slot 15 internally; UI may display it as "Texture 16" if using 1-based numbering.)
+	var VOID_SLOT := 15
+	if names.size() > VOID_SLOT:
+		names[VOID_SLOT] = "Void"
+
+	res.set("texture_names", names)
+
 const EMPTY_TEXTURE_PRESET : MarchingSquaresTexturePreset = preload("uid://db4scsn2nqqyu")
 const BrushPatternCalculator = preload("uid://bli1mnri3jwpa")
 
-var vp_texture_names = preload("uid://dd7fens03aosa")
+var vp_texture_names : MarchingSquaresTextureNames = preload("uid://dd7fens03aosa")
 
-var gizmo_plugin := MarchingSquaresTerrainGizmoPlugin.new()
-var toolbar := MarchingSquaresToolbar.new()
-var tool_attributes := MarchingSquaresToolAttributes.new()
+# Instantiate these lazily in _safe_initialize() to avoid editor-load ordering issues.
+const GizmoPluginScript := preload("res://addons/MarchingSquaresTerrain/editor/marching_squares_terrain_gizmo_plugin.gd")
+const ToolbarScript := preload("res://addons/MarchingSquaresTerrain/editor/tools/scripts/marching_squares_toolbar.gd")
+const ToolAttributesScript := preload("res://addons/MarchingSquaresTerrain/editor/tools/scripts/marching_squares_tool_attributes.gd")
+
+var gizmo_plugin : MarchingSquaresTerrainGizmoPlugin = null
+var toolbar : MarchingSquaresToolbar = null
+var tool_attributes : MarchingSquaresToolAttributes = null
 var active_tool : int = 0
 
 var UI : Script = preload("uid://bmedudg6sllf8")
@@ -150,6 +188,9 @@ var queued_ray_result := {}
 
 func _enter_tree():
 	instance = self
+	# texture_names.tres is used for dropdown enums; but in-editor it can load as a
+	# PlaceholderResource (scripts not loaded yet). Avoid calling methods on it.
+	_ensure_texture_names_resource(vp_texture_names)
 	call_deferred("_deferred_enter_tree")
 	
 	print_rich("Welcome to [color=MEDIUM_ORCHID][url=https://www.youtube.com/@yugen_seishin]Yūgen[/url][/color]'s [wave]Marching Squares Terrain Authoring Toolkit[/wave]\nThis plugin is under MIT license")
@@ -191,7 +232,7 @@ func _safe_initialize() -> bool:
 		return false
 	
 	if not gizmo_plugin:
-		gizmo_plugin = MarchingSquaresTerrainGizmoPlugin.new()
+		gizmo_plugin = GizmoPluginScript.new()
 	
 	# Clear stale/detached gizmo instances from before restart
 	gizmo_plugin._terrain_gizmos.clear()
@@ -201,9 +242,9 @@ func _safe_initialize() -> bool:
 	
 	
 	if not is_instance_valid(toolbar):
-		toolbar = MarchingSquaresToolbar.new()
+		toolbar = ToolbarScript.new()
 	if not is_instance_valid(tool_attributes):
-		tool_attributes = MarchingSquaresToolAttributes.new()
+		tool_attributes = ToolAttributesScript.new()
 
 	if not ui:
 		ui = UI.new()
@@ -248,7 +289,8 @@ func _refresh_editor_state() -> void:
 				EditorInterface.edit_node(node)
 
 func _ready():
-	BRUSH_RADIUS_MATERIAL.set_shader_parameter("falloff_visible", falloff)
+	if BRUSH_RADIUS_MATERIAL:
+		BRUSH_RADIUS_MATERIAL.set_shader_parameter("falloff_visible", falloff)
 
 
 func _queue_raycast(origin: Vector3, dir: Vector3, cam: Camera3D) -> void:

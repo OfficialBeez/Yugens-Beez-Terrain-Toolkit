@@ -43,6 +43,8 @@ var terrain_settings_data : Dictionary = {
 		"outline_width": "EditorSpinSlider",
 	},
 	"Grass Settings": {
+		"global_noise_scroll": "CheckBox",
+		"global_noise_octaves": "SpinBox",
 		"global_noise_scale": "EditorSpinSlider",
 		"global_noise_strength": "EditorSpinSlider",
 		"grass_subdivisions": "SpinBox",
@@ -141,9 +143,11 @@ func show_tool_attributes(tool_index: int) -> void:
 	# Rebuild material names from the preset or fallback to defaults
 	var terrain_names : Array = []
 	if plugin.current_terrain_node and plugin.current_terrain_node.current_texture_preset and plugin.current_terrain_node.current_texture_preset.new_tex_names:
-		terrain_names = plugin.current_terrain_node.current_texture_preset.new_tex_names.texture_names
+		MarchingSquaresTerrainPlugin._ensure_texture_names_resource(plugin.current_terrain_node.current_texture_preset.new_tex_names)
+		terrain_names = plugin.current_terrain_node.current_texture_preset.new_tex_names.get("texture_names")
 	else:
-		terrain_names = attribute_list.vp_tex_names.texture_names  # fallback
+		MarchingSquaresTerrainPlugin._ensure_texture_names_resource(attribute_list.vp_tex_names)
+		terrain_names = attribute_list.vp_tex_names.get("texture_names")  # fallback
 	attribute_list.material["options"] = terrain_names
 	
 	for attribute in new_attributes:
@@ -246,15 +250,37 @@ func add_setting(p_params: Dictionary) -> void:
 		SettingType.OPTION:
 			var options : Array = p_params.get("options", [])
 			var option_button := OptionButton.new()
-			for option in options:
-				option_button.add_item(option)
 			var default_value := p_params.get("default", 0) # Fallback base value
 			if saved_setting_value is not String and str(saved_setting_value) != "ERROR":
 				default_value = saved_setting_value
-			option_button.selected = default_value
+			
+			# Special-case the Material dropdown: we want "Void" to appear first, but
+			# we must keep slot indices stable (Void is slot 15 in the shader).
+			if setting_name == "material" and options.size() > 0:
+				var VOID_SLOT := 15
+				# Add "Void" first (id = 15), then the rest in-order (id = slot index).
+				if VOID_SLOT < options.size():
+					option_button.add_item(str(options[VOID_SLOT]), VOID_SLOT)
+				for slot_id in range(options.size()):
+					if slot_id == VOID_SLOT:
+						continue
+					option_button.add_item(str(options[slot_id]), slot_id)
+				# Select by id, not by index.
+				var default_id := clampi(int(default_value), 0, options.size() - 1)
+				var select_idx := 0
+				for idx in range(option_button.item_count):
+					if option_button.get_item_id(idx) == default_id:
+						select_idx = idx
+						break
+				option_button.select(select_idx)
+				option_button.item_selected.connect(func(idx): _on_setting_changed(setting_name, option_button.get_item_id(idx)))
+			else:
+				for option in options:
+					option_button.add_item(option)
+				option_button.selected = default_value
+				option_button.item_selected.connect(func(index): _on_setting_changed(setting_name, index))
 			
 			option_button.set_flat(true)
-			option_button.item_selected.connect(func(index): _on_setting_changed(setting_name, index))
 			option_button.set_custom_minimum_size(Vector2(65, 35))
 			
 			cont = CenterContainer.new()
@@ -482,6 +508,10 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			return _make_vector_editor(editor_setting, s_value, setting)
 		"SpinBox":
 			var spin_box := SpinBox.new()
+			if setting == "global_noise_octaves":
+				spin_box.min_value = 1
+				spin_box.max_value = 6
+				spin_box.step = 1
 			spin_box.value = s_value
 			spin_box.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
 			spin_box.set_custom_minimum_size(Vector2(80, 25))
@@ -533,9 +563,25 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			var option_button := OptionButton.new()
 			option_button.set_flat(true)
 			if setting == "default_wall_texture":
-				for tex_name in attribute_list.vp_tex_names.texture_names:
-					option_button.add_item(tex_name)
-				option_button.selected = s_value
+				MarchingSquaresTerrainPlugin._ensure_texture_names_resource(attribute_list.vp_tex_names)
+				var names : Array = attribute_list.vp_tex_names.get("texture_names")
+				var VOID_SLOT := 15
+				# Show Void first, but keep ids stable (Void is slot 15).
+				if names is Array and names.size() > 0:
+					if VOID_SLOT < names.size():
+						option_button.add_item(str(names[VOID_SLOT]), VOID_SLOT)
+					for slot_id in range(names.size()):
+						if slot_id == VOID_SLOT:
+							continue
+						option_button.add_item(str(names[slot_id]), slot_id)
+				# Select by id, not by index.
+				var default_id := clampi(int(s_value), 0, max(names.size() - 1, 0))
+				var select_idx := 0
+				for idx in range(option_button.item_count):
+					if option_button.get_item_id(idx) == default_id:
+						select_idx = idx
+						break
+				option_button.select(select_idx)
 			elif setting == "blend_mode":
 				option_button.add_item("Smoothed Triangles")
 				option_button.add_item("Hard Squares")
@@ -553,7 +599,7 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 				option_button.selected = s_value
 			else:
 				option_button.selected = s_value
-			option_button.item_selected.connect(func(index): _on_terrain_setting_changed(setting, index))
+			option_button.item_selected.connect(func(index): _on_terrain_setting_changed(setting, option_button.get_item_id(index)))
 			option_button.set_custom_minimum_size(Vector2(140, 25))
 			return option_button
 		"LineEdit":

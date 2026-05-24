@@ -17,6 +17,7 @@ var ground_texture_slot : int = 0
 
 # Dynamically define the dropdowns using the shared resource (unified 16-texture system)
 func _get_property_list() -> Array[Dictionary]:
+	MarchingSquaresTerrainPlugin._ensure_texture_names_resource(TEXTURE_NAMES)
 	var properties : Array[Dictionary] = []
 	
 	# Wall texture dropdown (uses unified texture names - any of 16 textures can be used for walls)

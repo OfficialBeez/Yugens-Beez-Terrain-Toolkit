@@ -98,50 +98,104 @@ func add_texture_settings() -> void:
 	if terrain == null:
 		return
 	
+	# Ensure slot arrays are initialized before we build UI.
+	terrain._ensure_texture_slots()
+	terrain._ensure_palette_settings()
+	
 	var vbox := VBoxContainer.new()
 	# Wider panel so palette weight sliders fit without being clipped.
 	vbox.set_custom_minimum_size(Vector2(260, 0))
-	var preset := terrain.current_texture_preset
 	
-	for i in range(15):
-		var name_label := Label.new()
-		name_label.text = preset.new_tex_names.texture_names[i] if preset and preset.new_tex_names and i < preset.new_tex_names.texture_names.size() else "Texture " + str(i + 1)
-		name_label.set_custom_minimum_size(Vector2(150, 25))
-		vbox.add_child(name_label, true)
+	var preset := terrain.current_texture_preset
+	var names : Array[String] = []
+	if preset and preset.new_tex_names:
+		MarchingSquaresTerrainPlugin._ensure_texture_names_resource(preset.new_tex_names)
+		names = preset.new_tex_names.get("texture_names")
+	elif vp_tex_names:
+		MarchingSquaresTerrainPlugin._ensure_texture_names_resource(vp_tex_names)
+		names = vp_tex_names.get("texture_names")
+	
+	var visible_count := clampi(int(terrain.visible_texture_slot_count), 1, 256)
+	
+	for i in range(visible_count):
+		var slot_idx := i
 		
-		# Ground texture picker
-		var tex_var : Texture2D = terrain.get(VAR_NAMES[i].get("tex_var"))
-		if tex_var != null and tex_var.get_class() == "Texture2D":
+		# Slot display name (saved in preset.new_tex_names when a preset is active)
+		var name_edit := LineEdit.new()
+		name_edit.text = names[slot_idx] if slot_idx < names.size() else ("Texture " + str(slot_idx + 1))
+		name_edit.placeholder_text = "Texture %d" % (slot_idx + 1)
+		name_edit.set_custom_minimum_size(Vector2(200, 25))
+		name_edit.tooltip_text = "Rename this texture slot (saved in the active preset)"
+		
+		# Void is reserved and always slot 16 (index 15).
+		if slot_idx == 15:
+			name_edit.text = "Void"
+			name_edit.editable = false
+			name_edit.tooltip_text = "Void (reserved)"
+		
+		# Only persist names into a real preset resource.
+		var persist_name := func(p_idx: int):
+			if preset == null or preset.new_tex_names == null:
+				return
+			MarchingSquaresTerrainPlugin._ensure_texture_names_resource(preset.new_tex_names)
+			var n := preset.new_tex_names.get("texture_names")
+			if n is Array and p_idx < n.size():
+				n[p_idx] = name_edit.text
+				preset.new_tex_names.set("texture_names", n)
+			# Refresh dropdowns (Material + Default Wall)
+			if plugin and plugin.ui and plugin.ui.tool_attributes:
+				plugin.ui.tool_attributes.show_tool_attributes(plugin.ui.active_tool)
+			if preset.resource_path != null and not str(preset.resource_path).is_empty():
+				ResourceSaver.save(preset)
+		
+		name_edit.text_submitted.connect(func(_t): persist_name.call(slot_idx))
+		name_edit.focus_exited.connect(func(): persist_name.call(slot_idx))
+		vbox.add_child(name_edit, true)
+		
+		# Terrain texture picker (slot-based)
+		var slot := terrain.texture_slots[i]
+		var tex_var : Texture2D = slot.texture if slot != null else null
+		if tex_var != null and not (tex_var is Texture2D):
 			tex_var = null
 		
 		var editor_r_picker := EditorResourcePicker.new()
 		editor_r_picker.set_base_type("Texture2D")
 		editor_r_picker.edited_resource = tex_var
-		editor_r_picker.resource_changed.connect(func(resource): _on_texture_setting_changed(VAR_NAMES[i].get("tex_var"), resource))
+		editor_r_picker.resource_changed.connect(func(resource, slot_idx := i):
+			if resource != null and not (resource is Texture2D):
+				resource = null
+			if terrain.texture_slots[slot_idx] == null:
+				terrain.texture_slots[slot_idx] = MarchingSquaresTextureSlot.new()
+			terrain.texture_slots[slot_idx].texture = resource
+			terrain.rebuild_texture_array()
+			if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+				terrain.save_to_preset()
+		)
 		editor_r_picker.set_custom_minimum_size(Vector2(100, 25))
 		vbox.add_child(editor_r_picker, true)
 		
-		# Grass settings (put directly under the texture picker)
+		# Grass settings (still legacy, only used for first 6 slots currently)
 		if i <= 5:
-			# Grass sprite picker
-			var sprite_var : Texture2D = terrain.get(VAR_NAMES[i].get("sprite_var"))
-			if sprite_var != null and sprite_var.get_class() == "Texture2D":
+			var sprite_prop := "grass_sprite_tex_%d" % (i + 1)
+			var sprite_var : Texture2D = terrain.get(sprite_prop)
+			if sprite_var != null and not (sprite_var is Texture2D):
 				sprite_var = null
 			
 			var editor_r_picker2 := EditorResourcePicker.new()
 			editor_r_picker2.set_base_type("Texture2D")
 			editor_r_picker2.edited_resource = sprite_var
-			editor_r_picker2.resource_changed.connect(func(resource): _on_texture_setting_changed(VAR_NAMES[i].get("sprite_var"), resource))
+			editor_r_picker2.resource_changed.connect(func(resource, prop := sprite_prop): _on_texture_setting_changed(prop, resource))
 			editor_r_picker2.set_custom_minimum_size(Vector2(100, 25))
 			vbox.add_child(editor_r_picker2, true)
+		
 		if i >= 1 and i <= 5:
-			# Has grass checkbox
-			var use_grass_var : bool = terrain.get(VAR_NAMES[i].get("use_grass_var"))
+			var use_grass_prop := "tex%d_has_grass" % (i + 1)
+			var use_grass_var : bool = bool(terrain.get(use_grass_prop))
 			var checkbox := CheckBox.new()
 			checkbox.text = "Has grass"
 			checkbox.set_flat(true)
 			checkbox.button_pressed = use_grass_var
-			checkbox.toggled.connect(func(pressed): _on_texture_setting_changed(VAR_NAMES[i].get("use_grass_var"), pressed))
+			checkbox.toggled.connect(func(pressed, prop := use_grass_prop): _on_texture_setting_changed(prop, pressed))
 			checkbox.set_custom_minimum_size(Vector2(25, 15))
 			
 			var c_cont_3 := CenterContainer.new()
@@ -149,43 +203,58 @@ func add_texture_settings() -> void:
 			c_cont_3.add_child(checkbox, true)
 			vbox.add_child(c_cont_3, true)
 		
-		# Scale slider
-		if VAR_NAMES[i].has("scale_var"):
-			var scale_var_name : String = VAR_NAMES[i].get("scale_var")
-			var scale_value : float = terrain.get(scale_var_name) if terrain.get(scale_var_name) else 1.0
-			
-			var scale_hbox := HBoxContainer.new()
-			scale_hbox.set_custom_minimum_size(Vector2(150, 20))
-			
-			var scale_label := Label.new()
-			scale_label.text = "Scale:"
-			scale_label.set_custom_minimum_size(Vector2(40, 20))
-			scale_hbox.add_child(scale_label)
-			
-			var c_cont_2 := CenterContainer.new()
-			var scale_slider := HSlider.new()
-			scale_slider.min_value = 0.1
-			scale_slider.max_value = 40.0
-			scale_slider.step = 0.1
-			scale_slider.set_custom_minimum_size(Vector2(80, 20))
-			scale_slider.drag_ended.connect(func(val): _on_slider_drag_ended(val))
-			c_cont_2.add_child(scale_slider, true)
-			scale_slider.set_value_no_signal(scale_value)
-			scale_slider.value_changed.connect(func(val): _on_texture_setting_changed(scale_var_name, val))
-			scale_hbox.add_child(c_cont_2, true)
-			
-			var scale_value_label := Label.new()
-			scale_value_label.text = str(scale_value)
-			scale_value_label.set_custom_minimum_size(Vector2(25, 20))
-			scale_slider.value_changed.connect(func(val): scale_value_label.text = str(snapped(val, 0.1)))
-			scale_hbox.add_child(scale_value_label)
-			
-			vbox.add_child(scale_hbox, true)
+		# Scale slider (slot-based)
+		var scale_value : float = float(slot.scale) if slot != null else 1.0
+		var scale_hbox := HBoxContainer.new()
+		scale_hbox.set_custom_minimum_size(Vector2(150, 20))
 		
-		# Palette UI for ALL slots
+		var scale_label := Label.new()
+		scale_label.text = "Scale:"
+		scale_label.set_custom_minimum_size(Vector2(40, 20))
+		scale_hbox.add_child(scale_label)
+		
+		var c_cont_2 := CenterContainer.new()
+		var scale_slider := HSlider.new()
+		scale_slider.min_value = 0.1
+		scale_slider.max_value = 40.0
+		scale_slider.step = 0.1
+		scale_slider.set_custom_minimum_size(Vector2(80, 20))
+		scale_slider.drag_ended.connect(func(val): _on_slider_drag_ended(val))
+		c_cont_2.add_child(scale_slider, true)
+		scale_slider.set_value_no_signal(scale_value)
+		scale_slider.value_changed.connect(func(val, slot_idx := i):
+			if terrain.texture_slots[slot_idx] == null:
+				terrain.texture_slots[slot_idx] = MarchingSquaresTextureSlot.new()
+			terrain.texture_slots[slot_idx].scale = float(val)
+			terrain._push_tex_scales()
+			if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+				terrain.save_to_preset()
+		)
+		scale_hbox.add_child(c_cont_2, true)
+		
+		var scale_value_label := Label.new()
+		scale_value_label.text = str(scale_value)
+		scale_value_label.set_custom_minimum_size(Vector2(25, 20))
+		scale_slider.value_changed.connect(func(val): scale_value_label.text = str(snapped(val, 0.1)))
+		scale_hbox.add_child(scale_value_label)
+		
+		vbox.add_child(scale_hbox, true)
+		
+		# Palette UI for ALL visible slots
 		_build_palette_ui(vbox, terrain, i)
 		
 		vbox.add_child(HSeparator.new())
+	
+	# Reveal more slots without rendering all 256 controls by default.
+	var add_button := Button.new()
+	add_button.text = "+ Add Texture"
+	add_button.pressed.connect(func():
+		terrain.visible_texture_slot_count = mini(int(terrain.visible_texture_slot_count) + 1, 256)
+		if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+			terrain.save_to_preset()
+		call_deferred("add_texture_settings")
+	)
+	vbox.add_child(add_button, true)
 	
 	var m_cont := MarginContainer.new()
 	m_cont.add_theme_constant_override("margin_bottom", 7)
@@ -218,7 +287,7 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 	blend_opt.set_custom_minimum_size(Vector2(95, 25))
 	blend_opt.item_selected.connect(func(idx):
 		terrain.slot_blend_modes[slot] = idx
-		terrain._push_slot_blend_modes()
+		terrain._rebuild_palette_uniforms()
 		terrain.save_to_preset()
 	)
 	blend_hbox.add_child(blend_opt)
@@ -376,7 +445,7 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 	outline_mode_opt.set_custom_minimum_size(Vector2(95, 25))
 	outline_mode_opt.item_selected.connect(func(idx):
 		terrain.slot_outline_modes[slot] = idx
-		terrain._push_slot_outline_settings()
+		terrain._rebuild_palette_uniforms()
 		terrain.save_to_preset()
 	)
 	outline_mode_hbox.add_child(outline_mode_opt)
@@ -385,7 +454,7 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 
 	outline_cb.toggled.connect(func(pressed):
 		terrain.slot_has_outline[slot] = pressed
-		terrain._push_slot_outline_settings()
+		terrain._rebuild_palette_uniforms()
 		terrain.save_to_preset()
 		outline_mode_hbox.visible = pressed
 	)

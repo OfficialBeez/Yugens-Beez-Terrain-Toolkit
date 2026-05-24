@@ -25,6 +25,8 @@ func _redraw():
 	
 	var terrain_system: MarchingSquaresTerrain = get_node_3d()
 	terrain_plugin = MarchingSquaresTerrainPlugin.instance
+	if terrain_plugin == null or not is_instance_valid(terrain_plugin):
+		return
 	
 	# Only draw the gizmo if this is the only selected node
 	if len(EditorInterface.get_selection().get_selected_nodes()) != 1:
@@ -33,7 +35,7 @@ func _redraw():
 		return
 	
 	# Selected chunk gizmo lines
-	if terrain_plugin.mode == terrain_plugin.TerrainToolMode.CHUNK_MANAGEMENT and terrain_plugin.selected_chunk:
+	if terrain_plugin.mode == terrain_plugin.TerrainToolMode.CHUNK_MANAGEMENT and is_instance_valid(terrain_plugin.selected_chunk) and is_instance_valid(terrain_plugin.current_terrain_node):
 		if terrain_plugin.current_terrain_node.find_child("Chunk " + str(terrain_plugin.selected_chunk.chunk_coords)):
 			add_chunk_lines(terrain_system, terrain_plugin.selected_chunk.chunk_coords, highlightchunk_material)
 		else:
@@ -94,7 +96,8 @@ func _redraw():
 	var is_wall_painting : bool = terrain_plugin.paint_walls_mode and terrain_plugin.mode == terrain_plugin.TerrainToolMode.VERTEX_PAINTING
 	
 	# Set the BRUSH_VISUAL's size dynamically
-	terrain_plugin.BRUSH_VISUAL.size = Vector2(1.0, 1.0) * (terrain_system.cell_size.x + terrain_system.cell_size.y) / 4.0
+	if terrain_plugin.BRUSH_VISUAL != null and (terrain_plugin.BRUSH_VISUAL is PlaneMesh or terrain_plugin.BRUSH_VISUAL is QuadMesh):
+		terrain_plugin.BRUSH_VISUAL.size = Vector2(1.0, 1.0) * (terrain_system.cell_size.x + terrain_system.cell_size.y) / 4.0
 	
 	if terrain_chunk_hovered:
 		# Brush radius visualization
@@ -167,7 +170,11 @@ func _redraw():
 						if not terrain_plugin.current_draw_pattern.is_empty() and terrain_plugin.flatten:
 							y = terrain_plugin.draw_height
 						else:
-							y = chunk.height_map[z][x]
+							# height_map can be empty while chunks initialize (or after errors).
+							if chunk.height_map.size() > z and z >= 0 and chunk.height_map[z].size() > x and x >= 0:
+								y = chunk.height_map[z][x]
+							else:
+								y = 0.0
 						
 						var draw_position := Vector3(world_pos.x, y, world_pos.y)
 						var draw_transform := Transform3D(Vector3.RIGHT*sample, Vector3.UP*sample, Vector3.BACK*sample, draw_position)
@@ -197,7 +204,12 @@ func _redraw():
 			for draw_coords: Vector2i in draw_chunk_dict:
 				var draw_x := (draw_chunk_coords.x * (terrain_system.dimensions.x - 1) + draw_coords.x) * terrain_system.cell_size.x
 				var draw_z := (draw_chunk_coords.y * (terrain_system.dimensions.z - 1) + draw_coords.y) * terrain_system.cell_size.y
-				var draw_y = terrain_plugin.draw_height if terrain_plugin.flatten else chunk.height_map[draw_coords.y][draw_coords.x]
+				var draw_y := terrain_plugin.draw_height if terrain_plugin.flatten else 0.0
+				if not terrain_plugin.flatten:
+					var dz := draw_coords.y
+					var dx := draw_coords.x
+					if chunk.height_map.size() > dz and dz >= 0 and chunk.height_map[dz].size() > dx and dx >= 0:
+						draw_y = chunk.height_map[dz][dx]
 				
 				var sample : float = draw_chunk_dict[draw_coords]
 				

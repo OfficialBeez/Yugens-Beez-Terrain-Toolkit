@@ -95,8 +95,8 @@ func generate_grass_on_cell(cell_coords: Vector2i) -> void:
 	
 	var cell_geometry = _chunk.cell_geometry[cell_coords]
 	
-	if not cell_geometry.has("verts") or not cell_geometry.has("uvs") or not cell_geometry.has("color_0s") or not cell_geometry.has("color_1s") or not cell_geometry.has("custom_1_values") or not cell_geometry.has("is_floor"):
-		push_error("cell_geometry doesn't have one of the following required data: 1) verts, 2) uvs, 3) colors, 4) custom_1_values, 5) is_floor")
+	if not cell_geometry.has("verts") or not cell_geometry.has("uvs") or not cell_geometry.has("color_1s") or not cell_geometry.has("custom_1_values") or not cell_geometry.has("mat_blend") or not cell_geometry.has("is_floor"):
+		push_error("cell_geometry missing required data: verts, uvs, color_1s (CUSTOM0), custom_1_values (CUSTOM1), mat_blend (CUSTOM2), is_floor")
 		return
 	
 	ensure_multimesh_count()
@@ -125,9 +125,9 @@ func generate_grass_on_cell(cell_coords: Vector2i) -> void:
 	
 	var verts : PackedVector3Array = cell_geometry["verts"]
 	var uvs : PackedVector2Array = cell_geometry["uvs"]
-	var color_0s : PackedColorArray = cell_geometry["color_0s"]
-	var color_1s : PackedColorArray = cell_geometry["color_1s"]
-	var custom_1_values : PackedColorArray = cell_geometry["custom_1_values"]
+	var custom_0_values : PackedColorArray = cell_geometry["color_1s"] # CUSTOM0
+	var custom_1_values : PackedColorArray = cell_geometry["custom_1_values"] # CUSTOM1
+	var mat_blend : PackedColorArray = cell_geometry["mat_blend"] # CUSTOM2
 	var is_floor : Array = cell_geometry["is_floor"]
 	
 	for i in range(0, len(verts), 3):
@@ -179,30 +179,38 @@ func generate_grass_on_cell(cell_coords: Vector2i) -> void:
 				var uv := uvs[i] * u + uvs[i + 1] * v + uvs[i + 2] * (1 - u - v)
 				var on_ledge_or_ridge : bool = uv.y > 0.0 or uv.x > 0.5
 				
-				# Interpolated (raw) vertex paint at this sample point
-				var raw_color_0 := color_0s[i] * u + color_0s[i + 1] * v + color_0s[i + 2] * (1 - u - v)
-				var raw_color_1 := color_1s[i] * u + color_1s[i + 1] * v + color_1s[i + 2] * (1 - u - v)
+				# Interpolated material blend payload (CUSTOM2) + extra weight (CUSTOM0.r)
+				var raw_blend := mat_blend[i] * u + mat_blend[i + 1] * v + mat_blend[i + 2] * (1 - u - v)
+				var raw_custom0 := custom_0_values[i] * u + custom_0_values[i + 1] * v + custom_0_values[i + 2] * (1 - u - v)
 				
 				# Check grass mask first - green channel forces grass ON, red channel masks grass OFF
 				var mask := custom_1_values[i] * u + custom_1_values[i + 1] * v + custom_1_values[i + 2] * (1 - u - v)
 				var is_masked : bool = mask.r < 0.9999
 				var force_grass_on : bool = mask.g >= 0.9999
 				
-				# confidence = strongest channel in either color set
-				var conf0 := maxf(raw_color_0.r, maxf(raw_color_0.g, maxf(raw_color_0.b, raw_color_0.a)))
-				var conf1 := maxf(raw_color_1.r, maxf(raw_color_1.g, maxf(raw_color_1.b, raw_color_1.a)))
-				var confidence := maxf(conf0, conf1)
+				var mat_a := clampi(int(round(raw_blend.r)), 0, 255)
+				var mat_b := clampi(int(round(raw_blend.g)), 0, 255)
+				var mat_c := clampi(int(round(raw_blend.b)), 0, 255)
+				var w_a := clamp(raw_blend.a, 0.0, 1.0)
+				var w_b := clamp(raw_custom0.r, 0.0, 1.0)
+				var w_c := clamp(1.0 - w_a - w_b, 0.0, 1.0)
+				
+				# Only spawn grass when we're mostly on a single material (prevents edge bleed).
+				var dominant_mat := mat_a
+				var confidence := w_a
+				if w_b > confidence:
+					dominant_mat = mat_b
+					confidence = w_b
+				if w_c > confidence:
+					dominant_mat = mat_c
+					confidence = w_c
 				
 				if not force_grass_on and confidence < 0.98:
 					_hide_grass_instance(index)
 					index += 1
 					continue
 				
-				# Collapse to dominant colors only after we're confident
-				var color_0 := MarchingSquaresTerrainVertexColorHelper.get_dominant_color(raw_color_0)
-				var color_1 := MarchingSquaresTerrainVertexColorHelper.get_dominant_color(raw_color_1)
-				
-				var texture_id := _get_texture_id(color_0, color_1)
+				var texture_id := dominant_mat + 1
 				var on_grass_tex := _has_grass_for_texture(texture_id, force_grass_on)
 				
 				if on_grass_tex and not on_ledge_or_ridge and not is_masked:
@@ -225,21 +233,11 @@ func generate_grass_on_cell(cell_coords: Vector2i) -> void:
 #region grass property getters
 
 func _get_terrain_image(texture_id: int) -> Image:
+	var slot_idx := clampi(texture_id - 1, 0, 255)
 	var terrain_texture : Texture2D = null
-	var material := terrain_system.terrain_material
-	match texture_id:
-		2:
-			terrain_texture = material.get_shader_parameter("vc_tex_rg")
-		3:
-			terrain_texture = material.get_shader_parameter("vc_tex_rb")
-		4:
-			terrain_texture = material.get_shader_parameter("vc_tex_ra")
-		5:
-			terrain_texture = material.get_shader_parameter("vc_tex_gr")
-		6:
-			terrain_texture = material.get_shader_parameter("vc_tex_gg")
-		_:
-			terrain_texture = material.get_shader_parameter("vc_tex_rr")
+	
+	if terrain_system and terrain_system.texture_slots.size() > slot_idx and terrain_system.texture_slots[slot_idx] != null:
+		terrain_texture = terrain_system.texture_slots[slot_idx].texture
 	
 	if terrain_texture == null:
 		return null

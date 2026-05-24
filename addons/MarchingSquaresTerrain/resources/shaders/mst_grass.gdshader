@@ -2,10 +2,10 @@ shader_type spatial;
 render_mode diffuse_toon, depth_draw_opaque;
 
 group_uniforms Visuals.Palette;
-uniform int slot_blend_modes[15];
-uniform vec4 slot_colors[120];
-uniform float slot_color_weights[120];
-uniform int slot_color_counts[15];
+// Palette data is provided via lookup textures (see mst_terrain.gdshaderinc for details).
+uniform sampler2D palette_colors_tex : filter_nearest;
+uniform sampler2D palette_weights_tex : filter_nearest;
+uniform sampler2D palette_meta_tex : filter_nearest;
 group_uniforms;
 
 group_uniforms Visuals.Textures;
@@ -70,6 +70,8 @@ group_uniforms;
 
 uniform float global_noise_scale = 0.08;
 uniform float global_noise_strength = 0.3;
+uniform bool global_noise_scroll = false;
+uniform int global_noise_octaves : hint_range(1, 6) = 5;
 
 varying float v_brightness;
 varying vec3 v_grass_color;
@@ -115,6 +117,19 @@ float fbm(vec2 p) {
 	return value;
 }
 
+float fbm_octaves(vec2 p, int octaves) {
+	float value = 0.0;
+	float amplitude = 0.5;
+	float frequency = 1.0;
+	for (int i = 0; i < 6; i++) {
+		if (i >= octaves) break;
+		value += amplitude * noise(p * frequency);
+		frequency *= 2.0;
+		amplitude *= 0.5;
+	}
+	return value;
+}
+
 float directional_pulse(vec2 world_xz, vec2 dir, float t) {
 	float along = dot(world_xz, dir);
 	vec2 perp = vec2(-dir.y, dir.x);
@@ -153,15 +168,41 @@ float turbulent_wind(vec2 world_xz, float t) {
 
 // ---------------- End of Wind -------------------------
 
+vec4 _palette_meta(int slot) {
+	slot = clamp(slot, 0, 255);
+	float v = (float(slot) + 0.5) / 256.0;
+	return texture(palette_meta_tex, vec2(0.5, v));
+}
+
+int _palette_count(int slot) {
+	return int(round(_palette_meta(slot).r * 255.0));
+}
+
+int _palette_blend_mode(int slot) {
+	return int(round(_palette_meta(slot).g * 255.0));
+}
+
 vec4 sample_palette_entry(int slot, int color_idx) {
-	return slot_colors[slot * 8 + clamp(color_idx, 0, 7)];
+	slot = clamp(slot, 0, 255);
+	int idx = clamp(color_idx, 0, 7);
+	float u = (float(idx) + 0.5) / 8.0;
+	float v = (float(slot) + 0.5) / 256.0;
+	return texture(palette_colors_tex, vec2(u, v));
+}
+
+float sample_palette_weight(int slot, int color_idx) {
+	slot = clamp(slot, 0, 255);
+	int idx = clamp(color_idx, 0, 7);
+	float u = (float(idx) + 0.5) / 8.0;
+	float v = (float(slot) + 0.5) / 256.0;
+	return max(texture(palette_weights_tex, vec2(u, v)).r, 0.0);
 }
 
 vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
-	int color_count = slot_color_counts[slot];
-
+	slot = clamp(slot, 0, 255);
+	int color_count = _palette_count(slot);
 	if (color_count <= 0) return vec3(0.392, 0.471, 0.318);
-	if (color_count == 1) return slot_colors[slot * 8].rgb;
+	if (color_count == 1) return sample_palette_entry(slot, 0).rgb;
 
 	vec2 p = vec2(
 		world_xz.x * 0.06 + world_xz.y * 0.041 + world_y * 0.06,
@@ -169,14 +210,14 @@ vec3 get_grass_palette_color(int slot, vec2 world_xz, float world_y) {
 	float n = cheap_noise(p);
 	n = smoothstep(0.0, 1.0, n);
 
-	int mode = slot_blend_modes[slot];
+	int mode = _palette_blend_mode(slot);
 
 	// Weighted distribution (values are normalized per slot).
 	float ws[8];
 	float total = 0.0;
 	for (int i = 0; i < 8; i++) {
 		if (i < color_count) {
-			float w = max(slot_color_weights[slot * 8 + i], 0.0);
+			float w = sample_palette_weight(slot, i);
 			ws[i] = w;
 			total += w;
 		} else {
@@ -255,7 +296,8 @@ void vertex() {
 			g = pow(smoothstep(0.3, 0.85, g), 1.8);
 			raw = g - 0.4;
 		} else if (wind_mode == 2) {
-			float p = directional_pulse(world_pos.xz, normalized_dir, TIME);
+			// Pulse feels inverted compared to the other directional modes.
+			float p = directional_pulse(world_pos.xz, -normalized_dir, TIME);
 			raw = p - 0.15;
 		} else {
 			raw = turbulent_wind(world_pos.xz, TIME);
@@ -288,7 +330,8 @@ void vertex() {
 				g = pow(smoothstep(0.3, 0.85, g), 1.8);
 				raw = g - 0.4;
 			} else if (wind_mode == 2) {
-				float p = directional_pulse(world_pos.xz, normalized_dir, TIME);
+				// Pulse feels inverted compared to the other directional modes.
+				float p = directional_pulse(world_pos.xz, -normalized_dir, TIME);
 				raw = p - 0.15;
 			} else {
 				raw = turbulent_wind(world_pos.xz, TIME);
@@ -358,10 +401,15 @@ void vertex() {
 	
 	v_brightness = 1.0;
 	if (global_noise_strength > 0.0) {
-			float gn = fbm(vec2(
-				world_origin.x * global_noise_scale + world_origin.z * 0.031,
-				world_origin.z * global_noise_scale - world_origin.x * 0.023
-			));
+			vec2 scroll = vec2(0.0);
+			if (global_noise_scroll) {
+				vec2 dir = normalize(wind_direction);
+				scroll = dir * TIME * wind_speed * 3.0;
+			}
+			float gn = fbm_octaves(vec2(
+				(world_origin.x + scroll.x) * global_noise_scale + (world_origin.z + scroll.y) * 0.031,
+				(world_origin.z + scroll.y) * global_noise_scale - (world_origin.x + scroll.x) * 0.023
+			), global_noise_octaves);
 			gn = smoothstep(0.0, 1.0, gn);
 			v_brightness = mix(1.0 - global_noise_strength, 1.0 + (global_noise_strength * 0.5), gn);
 	}

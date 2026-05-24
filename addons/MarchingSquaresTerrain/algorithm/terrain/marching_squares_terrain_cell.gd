@@ -71,11 +71,13 @@ var rotation : CellRotation:
 
 var merge_threshold : float
 
-var chunk : MarchingSquaresTerrainChunk
-var color_helper : MarchingSquaresTerrainVertexColorHelper
+# NOTE: Untyped to avoid @tool cyclic load issues (chunk <-> cell <-> helper).
+var chunk
+var color_helper
 
 
-func _init(chunk_: MarchingSquaresTerrainChunk, color_helper_: MarchingSquaresTerrainVertexColorHelper, y_top_left: float, y_top_right: float, y_bottom_left: float, y_bottom_right: float, merge_threshold_: float) -> void:
+# chunk_: MarchingSquaresTerrainChunk, color_helper_: MarchingSquaresTerrainVertexColorHelper
+func _init(chunk_, color_helper_, y_top_left: float, y_top_right: float, y_bottom_left: float, y_bottom_right: float, merge_threshold_: float) -> void:
 	chunk = chunk_
 	color_helper = color_helper_
 	_ay = y_top_left
@@ -83,8 +85,8 @@ func _init(chunk_: MarchingSquaresTerrainChunk, color_helper_: MarchingSquaresTe
 	_cy = y_bottom_left
 	_dy = y_bottom_right
 	
-	var cell_scale_factor := clamp(((chunk_.terrain_system.cell_size.x + chunk_.terrain_system.cell_size.y) / 4.0), 0.3, 1.0)
-	var dimensions_scale_factor := clamp((((chunk_.terrain_system.dimensions.x / 33) + (chunk_.terrain_system.dimensions.z / 33)) / 2.0), 0.5, 2.0)
+	var cell_scale_factor = clamp(((chunk_.terrain_system.cell_size.x + chunk_.terrain_system.cell_size.y) / 4.0), 0.3, 1.0)
+	var dimensions_scale_factor = clamp((((chunk_.terrain_system.dimensions.x / 33) + (chunk_.terrain_system.dimensions.z / 33)) / 2.0), 0.5, 2.0)
 	merge_threshold = merge_threshold_ * dimensions_scale_factor * cell_scale_factor
 	rotation = 0 as CellRotation
 
@@ -248,29 +250,29 @@ func start_wall() -> void:
 
 func add_point(x: float, y: float, z: float, u: float, v: float):
 	for i in range(rotation as int):
-		var temp := x
+		var temp = x
 		x = 1 - z
 		z = temp
 	
 	# UV - used for ledge detection. X = closeness to top terrace, Y = closeness to bottom of terrace
 	# Walls will always have UV of 1, 1
-	var uv := Vector2(u, v) if floor_mode else Vector2(1, 1)
+	var uv = Vector2(u, v) if floor_mode else Vector2(1, 1)
 	
 	# Same calculations from here
-	var vert := Vector3((cell_coords.x+x) * chunk.cell_size.x, y, (cell_coords.y+z) * chunk.cell_size.y)
+	var vert = Vector3((cell_coords.x+x) * chunk.cell_size.x, y, (cell_coords.y+z) * chunk.cell_size.y)
 	var uv2 : Vector2
 	if floor_mode:
 		uv2 = Vector2(vert.x, vert.z) / chunk.cell_size
 	else:
 		# This avoids is_inside_tree() errors when inactive scene tabs are loaded
 		var chunk_pos : Vector3 = chunk.global_position_cached
-		var global_pos := vert + chunk_pos
+		var global_pos = vert + chunk_pos
 		uv2 = (Vector2(global_pos.x, global_pos.y) + Vector2(global_pos.z, global_pos.y))
 	
 	pts.append(vert)
 	uvs.append(uv)
 	uv2s.append(uv2)
-	var colors := color_helper.blend_colors(Vector3(x,y,z), uv)
+	var colors: Dictionary = color_helper.blend_colors(Vector3(x,y,z), uv)
 	custom_1_values.append(colors["custom_1_value"])
 	color_0s.append(colors["color_0"])
 	color_1s.append(colors["color_1"])
@@ -455,8 +457,8 @@ func add_c16() -> void:
 
 
 func add_c17() -> void:
-	var edge_by := (by + dy) / 2
-	var edge_dy := (by + dy) / 2
+	var edge_by = (by + dy) / 2
+	var edge_dy = (by + dy) / 2
 	
 	# Upper floor
 	start_floor()
@@ -487,8 +489,8 @@ func add_c17() -> void:
 
 func add_c18() -> void:
 	# Only merge the ay/cy edge if AC edge is connected
-	var edge_ay := (ay+cy)/2
-	var edge_cy := (ay+cy)/2
+	var edge_ay = (ay+cy)/2
+	var edge_cy = (ay+cy)/2
 	
 	# Upper floor - use A and B edge for heights
 	start_floor()
@@ -520,7 +522,7 @@ func add_c18() -> void:
 func add_full_floor():
 	start_floor()
 	if higher_poly_floors:
-		var ey := (ay+by+cy+dy)/4
+		var ey = (ay+by+cy+dy)/4
 	
 		add_point(0, ay, 0, 0, 0)
 		add_point(1, by, 0, 0, 0)
@@ -550,8 +552,8 @@ func add_full_floor():
 # Add an outer corner, where A is the raised corner.
 # If flatten_bottom is true, then bottom_height is used for the lower height of the wall
 func add_outer_corner(floor_below: bool = true, floor_above: bool = true, flatten_bottom: bool = false, bottom_height: float = -1):
-	var edge_by := bottom_height if flatten_bottom else by
-	var edge_cy := bottom_height if flatten_bottom else cy
+	var edge_by = bottom_height if flatten_bottom else by
+	var edge_cy = bottom_height if flatten_bottom else cy
 	
 	if floor_above:
 		start_floor()
@@ -589,10 +591,10 @@ func add_outer_corner(floor_below: bool = true, floor_above: bool = true, flatte
 # b_x is the x coordinate that the top-right of the upper floor connects to
 func add_edge(floor_below: bool, floor_above: bool, a_x: float = 0, b_x: float = 1):
 	# If A and B are out of merge distance, use the lower of the two
-	var edge_ay := ay if ab else min(ay, by)
-	var edge_by := by if ab else min(ay, by)
-	var edge_cy := cy if cd else max(cy, dy)
-	var edge_dy := dy if cd else max(cy, dy)
+	var edge_ay = ay if ab else min(ay, by)
+	var edge_by = by if ab else min(ay, by)
+	var edge_cy = cy if cd else max(cy, dy)
+	var edge_dy = dy if cd else max(cy, dy)
 	
 	# Upper floor - use A and B for heights
 	if floor_above:
@@ -630,8 +632,8 @@ func add_edge(floor_below: bool, floor_above: bool, a_x: float = 0, b_x: float =
 
 # Add an inner corner, where A is the lowered corner.
 func add_inner_corner(lower_floor: bool = true, full_upper_floor: bool = true, flatten: bool = false, bd_floor: bool = false, cd_floor: bool = false):
-	var corner_by := min(by, cy) if flatten else by
-	var corner_cy := min(by, cy) if flatten else cy
+	var corner_by = min(by, cy) if flatten else by
+	var corner_cy = min(by, cy) if flatten else cy
 	
 	# Lower floor with height of point A
 	if lower_floor:
