@@ -126,29 +126,16 @@ enum StorageMode {
 		var grass_mat := grass_mesh.material as ShaderMaterial
 		grass_mat.set_shader_parameter("use_cell_shading", value)
 
-enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1, CHUNK_OUTLINE = 2 }
+enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 
-var _outline_syncing: bool = false
-
-# Outline mode selector (replaces the old edge_highlights checkbox)
-@export_custom(PROPERTY_HINT_ENUM, "Off,Black Silhouette,Chunk Outline", PROPERTY_USAGE_STORAGE) var outline_mode: int = OutlineMode.OFF:
+# Outline mode selector
+@export_custom(PROPERTY_HINT_ENUM, "Off,Black Silhouette", PROPERTY_USAGE_STORAGE) var outline_mode: int = OutlineMode.OFF:
 	set(value):
-		outline_mode = clampi(int(value), 0, 2)
-		if not _outline_syncing:
-			_outline_syncing = true
-			edge_highlights = (outline_mode != OutlineMode.OFF)
-			_outline_syncing = false
-		_apply_outline_next_pass()
-
-# Legacy storage flag (kept for backwards compatibility with older scenes).
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_NO_EDITOR) var edge_highlights : bool = false:
-	set(value):
-		edge_highlights = bool(value)
-		if not _outline_syncing:
-			_outline_syncing = true
-			outline_mode = OutlineMode.BLACK_SILHOUETTE if edge_highlights else OutlineMode.OFF
-			_outline_syncing = false
-		_apply_outline_next_pass()
+		var new_mode := clampi(int(value), 0, 1)
+		if outline_mode == new_mode:
+			return
+		outline_mode = new_mode
+		_request_outline_apply()
 
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var collision_depth: float = 0.0:
 	set(value):
@@ -273,9 +260,7 @@ var _outline_syncing: bool = false
 	set(value):
 		grass_size_variation = clampf(value, 0.0, 1.0)
 		if not is_batch_updating and Engine.is_editor_hint():
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				if chunk.grass_planter:
-					chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_RANGE, "0.005, 0.5, 0.005", PROPERTY_USAGE_STORAGE) var color_variation_scale : float = 0.08:
 	set(value):
 		color_variation_scale = value
@@ -616,18 +601,32 @@ const VOID_TEXTURE_SLOT := 15
 ]
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_blend_modes: Array[int] = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 
+@export_category("Vertex Painter")
 # Outline settings (per texture slot)
 # slot_has_outline[slot] enables a thin edge/foam line where that texture blends with another.
 # slot_outline_modes[slot]: 0 = darken Color 1, 1 = use last palette color
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_has_outline: Array[bool] = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_outline_modes: Array[int] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+# slot_outline_widths[slot] controls the thickness of the per-material "foam" outline when textures meet.
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_outline_widths: Array[float] = [
+	6.0, 6.0, 6.0, 6.0, 6.0,
+	6.0, 6.0, 6.0, 6.0, 6.0,
+	6.0, 6.0, 6.0, 6.0, 6.0,
+]
+
+@export_custom(PROPERTY_HINT_RANGE, "0.0,32.0,0.25", PROPERTY_USAGE_STORAGE) var outline_px: float = 2.0:
+	set(value):
+		outline_px = clampf(float(value), 0.0, 32.0)
+		if not is_batch_updating:
+			_request_outline_apply()
 
 @export_custom(PROPERTY_HINT_RANGE, "0.25,32.0,0.25", PROPERTY_USAGE_STORAGE) var outline_width: float = 6.0:
 	set(value):
 		outline_width = clampf(value, 0.25, 32.0)
 		if not is_batch_updating and terrain_material:
 			terrain_material.set_shader_parameter("outline_width", outline_width)
-			_apply_outline_next_pass()
+			_request_outline_apply()
+
 
 # Default wall texture slot (0-15) used when no quick paint is active
 # Default is 5 (Texture 6 in 1-indexed UI terms)
@@ -693,7 +692,9 @@ func _init() -> void:
 func get_chunk_surface_material() -> Material:
 	# Black silhouette outline must render BEFORE the terrain, otherwise it gets depth-tested away.
 	if outline_mode == OutlineMode.BLACK_SILHOUETTE and outline_next_pass_material and terrain_material:
-		outline_next_pass_material.set_shader_parameter("outline_thickness", clampf(outline_width * 0.01, 0.001, 0.2))
+		outline_next_pass_material.set_shader_parameter("outline_px", outline_px)
+		# World-space fallback (used only if outline_px is set to 0).
+		outline_next_pass_material.set_shader_parameter("outline_thickness", 0.02)
 		outline_next_pass_material.next_pass = terrain_material
 		return outline_next_pass_material
 
@@ -702,23 +703,70 @@ func get_chunk_surface_material() -> Material:
 	return terrain_material
 
 
+var _outline_apply_deferred: bool = false
+var _outline_apply_timer: Timer = null
+
+var _grass_regen_timer: Timer = null
+
+
+func _request_grass_regen() -> void:
+	if is_batch_updating:
+		return
+
+	# Coalesce editor slider drags into a single grass rebuild.
+	if EngineWrapper.instance.is_editor():
+		if _grass_regen_timer == null:
+			_grass_regen_timer = Timer.new()
+			_grass_regen_timer.name = "_mst_grass_regen_timer"
+			_grass_regen_timer.one_shot = true
+			add_child(_grass_regen_timer)
+			_grass_regen_timer.timeout.connect(_apply_grass_regen)
+		_grass_regen_timer.wait_time = 0.12
+		_grass_regen_timer.start()
+		return
+
+	_apply_grass_regen()
+
+
+func _apply_grass_regen() -> void:
+	for chunk: MarchingSquaresTerrainChunk in chunks.values():
+		if chunk and chunk.grass_planter:
+			chunk.grass_planter.regenerate_all_cells()
+
+
+func _request_outline_apply() -> void:
+	if is_batch_updating:
+		return
+
+	# Editor changes (slider drags, rapid UI updates) should coalesce into a single apply.
+	if EngineWrapper.instance.is_editor():
+		if _outline_apply_timer == null:
+			_outline_apply_timer = Timer.new()
+			_outline_apply_timer.name = "_mst_outline_apply_timer"
+			_outline_apply_timer.one_shot = true
+			add_child(_outline_apply_timer)
+			_outline_apply_timer.timeout.connect(_apply_outline_next_pass)
+		_outline_apply_timer.wait_time = 0.05
+		_outline_apply_timer.start()
+		return
+
+	# Runtime: coalesce within a frame.
+	if _outline_apply_deferred:
+		return
+	_outline_apply_deferred = true
+	call_deferred("_apply_outline_next_pass_deferred")
+
+
+func _apply_outline_next_pass_deferred() -> void:
+	_outline_apply_deferred = false
+	_apply_outline_next_pass()
+
+
 func _apply_outline_next_pass() -> void:
 	if not terrain_material:
 		return
 
-	# Disable screen-space edge highlights (they read as jittery/snowy).
-	terrain_material.set_shader_parameter("use_edge_highlights", false)
-
 	var use_black_silhouette := (outline_mode == OutlineMode.BLACK_SILHOUETTE)
-
-	# Floor/wall seam outline is now generated as a post overlay mesh per-chunk.
-	# This allows the outline to sample the already-lit terrain color (so it darkens in shadow).
-	terrain_material.set_shader_parameter("use_seam_outline", false)
-	terrain_material.set_shader_parameter("seam_outline_from_albedo", false)
-	terrain_material.set_shader_parameter("seam_outline_lift", 0.0)
-	terrain_material.set_shader_parameter("seam_outline_color", Color(1, 1, 1, 1))
-	terrain_material.set_shader_parameter("seam_outline_width", maxf(outline_width * 0.35, 0.5))
-	terrain_material.set_shader_parameter("seam_outline_strength", 0.0)
 
 	# We no longer use terrain_material.next_pass for silhouette outlines because the order is wrong.
 	terrain_material.next_pass = null
@@ -728,8 +776,9 @@ func _apply_outline_next_pass() -> void:
 	# Configure pass chain + choose the active material used by chunk surfaces.
 	var active_mat: Material = terrain_material
 	if use_black_silhouette and outline_next_pass_material:
-		# Map the existing Outline Width slider to a world-space thickness.
-		outline_next_pass_material.set_shader_parameter("outline_thickness", clampf(outline_width * 0.01, 0.001, 0.2))
+		outline_next_pass_material.set_shader_parameter("outline_px", outline_px)
+		# World-space fallback (used only if outline_px is set to 0).
+		outline_next_pass_material.set_shader_parameter("outline_thickness", 0.02)
 		outline_next_pass_material.next_pass = terrain_material
 		active_mat = outline_next_pass_material
 
@@ -737,12 +786,10 @@ func _apply_outline_next_pass() -> void:
 	for chunk: MarchingSquaresTerrainChunk in chunks.values():
 		if chunk and chunk.mesh and chunk.mesh.get_surface_count() > 0:
 			chunk.mesh.surface_set_material(0, active_mat)
+		# Internal edge outline overlay (seams + wall edges inside the chunk).
+		if chunk:
+			chunk.apply_internal_edge_outline_settings(use_black_silhouette, outline_px)
 
-	# Update per-chunk wall boundary outline mesh (white), derived from wall mesh boundary edges.
-	# Chunks will clear their overlay when chunk-outline mode is not selected.
-	for chunk: MarchingSquaresTerrainChunk in chunks.values():
-		if chunk and chunk.has_method("regenerate_wall_boundary_outline"):
-			chunk.regenerate_wall_boundary_outline()
 
 
 func _ensure_texture_slots() -> void:
@@ -778,12 +825,17 @@ func _ensure_palette_settings() -> void:
 		slot_has_outline.resize(MAX_TEXTURE_SLOTS)
 	if slot_outline_modes.size() != MAX_TEXTURE_SLOTS:
 		slot_outline_modes.resize(MAX_TEXTURE_SLOTS)
+	if slot_outline_widths.size() != MAX_TEXTURE_SLOTS:
+		slot_outline_widths.resize(MAX_TEXTURE_SLOTS)
 	for i in range(MAX_TEXTURE_SLOTS):
 		if slot_has_outline[i] == null:
 			slot_has_outline[i] = false
 		if slot_outline_modes[i] == null:
 			slot_outline_modes[i] = 0
 		slot_outline_modes[i] = clampi(int(slot_outline_modes[i]), 0, 1)
+		if slot_outline_widths[i] == null:
+			slot_outline_widths[i] = outline_width
+		slot_outline_widths[i] = clampf(float(slot_outline_widths[i]), 0.25, 32.0)
 
 
 func _maybe_migrate_legacy_textures() -> void:
@@ -985,6 +1037,9 @@ func _deferred_enter_tree() -> void:
 		if force_regen_for_wall_fixes:
 			chunk.regenerate_mesh(true)
 	
+	# Chunks now exist; apply current outline mode so materials + per-chunk overlays are generated.
+	_apply_outline_next_pass()
+	
 	load_finished.emit()
 
 
@@ -1172,6 +1227,7 @@ func _rebuild_palette_uniforms() -> void:
 	var img_colors := Image.create_empty(8, MAX_TEXTURE_SLOTS, false, Image.FORMAT_RGBAF)
 	var img_weights := Image.create_empty(8, MAX_TEXTURE_SLOTS, false, Image.FORMAT_RGBAF)
 	var img_meta := Image.create_empty(1, MAX_TEXTURE_SLOTS, false, Image.FORMAT_RGBA8)
+	var img_outline_width := Image.create_empty(1, MAX_TEXTURE_SLOTS, false, Image.FORMAT_RGBAF)
 
 	# Palette colors are edited/stored as sRGB-style values (e.g. 100/255 = 0.392...).
 	# Shaders operate in linear space, so convert to linear before uploading.
@@ -1187,6 +1243,7 @@ func _rebuild_palette_uniforms() -> void:
 		var has_outline := 1 if bool(slot_has_outline[slot]) else 0
 		var outline_mode := clampi(int(slot_outline_modes[slot]), 0, 1)
 		img_meta.set_pixel(0, slot, Color(float(out_count) / 255.0, float(mode) / 255.0, float(has_outline) / 255.0, float(outline_mode) / 255.0))
+		img_outline_width.set_pixel(0, slot, Color(float(slot_outline_widths[slot]), 0.0, 0.0, 1.0))
 
 		for i in range(8):
 			var c := Color(1.0, 1.0, 1.0, 1.0)
@@ -1204,15 +1261,18 @@ func _rebuild_palette_uniforms() -> void:
 	var tex_colors := ImageTexture.create_from_image(img_colors)
 	var tex_weights := ImageTexture.create_from_image(img_weights)
 	var tex_meta := ImageTexture.create_from_image(img_meta)
+	var tex_outline_width := ImageTexture.create_from_image(img_outline_width)
 
 	terrain_material.set_shader_parameter("palette_colors_tex", tex_colors)
 	terrain_material.set_shader_parameter("palette_weights_tex", tex_weights)
 	terrain_material.set_shader_parameter("palette_meta_tex", tex_meta)
+	terrain_material.set_shader_parameter("palette_outline_width_tex", tex_outline_width)
 
 	var grass_mat := grass_mesh.material as ShaderMaterial
 	grass_mat.set_shader_parameter("palette_colors_tex", tex_colors)
 	grass_mat.set_shader_parameter("palette_weights_tex", tex_weights)
 	grass_mat.set_shader_parameter("palette_meta_tex", tex_meta)
+	grass_mat.set_shader_parameter("palette_outline_width_tex", tex_outline_width)
 
 
 func _push_slot_blend_modes() -> void:
@@ -1360,6 +1420,7 @@ func save_to_preset() -> void:
 	_ensure_outline_settings()
 	current_texture_preset.slot_has_outline = slot_has_outline.duplicate()
 	current_texture_preset.slot_outline_modes = slot_outline_modes.duplicate()
+	current_texture_preset.slot_outline_widths = slot_outline_widths.duplicate()
 	
 	# Has grass flags
 	current_texture_preset.new_textures.has_grass[0] = tex2_has_grass
@@ -1381,7 +1442,7 @@ func load_from_preset(preset: MarchingSquaresTexturePreset) -> void:
 			has_real_palette_data = true
 			break
 
-	if preset.slot_color_indices.size() == 15 and has_real_palette_data:
+	if (preset.slot_color_indices.size() == 15 or preset.slot_color_indices.size() == MAX_TEXTURE_SLOTS) and has_real_palette_data:
 		slot_color_indices = preset.slot_color_indices.duplicate(true)
 		if preset.new_textures.grass_colors.size() == 128:
 			palette_colors = preset.new_textures.grass_colors.duplicate()
@@ -1400,20 +1461,26 @@ func load_from_preset(preset: MarchingSquaresTexturePreset) -> void:
 			palette_colors[i] = Color("647851ff")
 			palette_weights[i] = 100.0
 
-	if preset.slot_blend_modes.size() == 15:
+	if preset.slot_blend_modes.size() == 15 or preset.slot_blend_modes.size() == MAX_TEXTURE_SLOTS:
 		slot_blend_modes = preset.slot_blend_modes.duplicate()
 	else:
 		slot_blend_modes = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 
-	if preset.slot_has_outline.size() == 15:
+	if preset.slot_has_outline.size() == 15 or preset.slot_has_outline.size() == MAX_TEXTURE_SLOTS:
 		slot_has_outline = preset.slot_has_outline.duplicate()
 	else:
 		slot_has_outline = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
 
-	if preset.slot_outline_modes.size() == 15:
+	if preset.slot_outline_modes.size() == 15 or preset.slot_outline_modes.size() == MAX_TEXTURE_SLOTS:
 		slot_outline_modes = preset.slot_outline_modes.duplicate()
 	else:
 		slot_outline_modes = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+	if preset.get("slot_outline_widths") is Array and (preset.slot_outline_widths.size() == 15 or preset.slot_outline_widths.size() == MAX_TEXTURE_SLOTS):
+		slot_outline_widths = preset.slot_outline_widths.duplicate()
+	else:
+		slot_outline_widths = [6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0]
+
 	_ensure_outline_settings()
 	terrain_material.set_shader_parameter("outline_width", outline_width)
 

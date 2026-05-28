@@ -79,12 +79,15 @@ var _temp_collision_shapes : Array[ConcavePolygonShape3D] = []  # COMMENT: Old s
 var _temp_height_map : Array  # Source data - saved to external storage, not scene file
 #endregion
 
-# Chunk-outline overlays (generated meshes drawn on top of the terrain)
-var _wall_boundary_outline_instance: MeshInstance3D = null
-var _wall_boundary_outline_material: ShaderMaterial = null
 
-var _seam_outline_instance: MeshInstance3D = null
-var _seam_outline_material: ShaderMaterial = null
+# Collision nodes (reused to avoid destroying/recreating nodes every mesh regen)
+var _collision_body: StaticBody3D = null
+var _collision_shape_node: CollisionShape3D = null
+
+# Internal edge outline overlay (generated mesh; never saved).
+const _INTERNAL_OUTLINE_SHADER := preload("res://addons/MarchingSquaresTerrain/resources/shaders/mst_internal_edge_outline.gdshader")
+var _internal_outline_instance: MeshInstance3D = null
+var _internal_outline_material: ShaderMaterial = null
 
 #region blend option vars
 # Terrain blend options to allow for smooth color and height blend influence at transitions and at different heights 
@@ -101,6 +104,8 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 		needs_update.append([])
 		for x in range(dimensions.x - 1):
 			needs_update[z].append(true)
+
+	_cleanup_old_chunk_outline_overlays()
 	
 	if not get_node_or_null("GrassPlanter"):
 		grass_planter = get_node_or_null("GrassPlanter")
@@ -287,8 +292,7 @@ func _exit_tree() -> void:
 
 func regenerate_mesh(use_threads: bool = false):
 	st = SurfaceTool.new()
-	if mesh:
-		st.create_from(mesh, 0)
+	# NOTE: create_from() is unnecessary here because we immediately begin() a fresh surface.
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_custom_format(0, SurfaceTool.CUSTOM_RGBA_FLOAT)
 	st.set_custom_format(1, SurfaceTool.CUSTOM_RGBA_FLOAT)
@@ -307,331 +311,187 @@ func regenerate_mesh(use_threads: bool = false):
 		if mesh.get_surface_count() > 0:
 			mesh.surface_set_material(0, terrain_system.get_chunk_surface_material())
 	
-	for child in get_children():
-		if child is StaticBody3D:
-			child.free()
 	create_collision_with_depth(terrain_system.collision_depth)
-	
-	# Also rebuild the wall boundary outline overlay (if enabled)
-	regenerate_wall_boundary_outline()
+	_regenerate_internal_edge_outline_mesh()
 	
 	var elapsed_time : int = Time.get_ticks_msec() - start_time
 	print_verbose("Generated terrain in "+str(elapsed_time)+"ms")
 
 
-func _ensure_wall_boundary_outline_instance() -> void:
-	# Reuse existing overlay nodes if they were saved into the scene previously.
-	# These are generated meshes and should NOT be owned/saved.
-	if _wall_boundary_outline_instance == null:
-		var existing_wall := get_node_or_null("WallBoundaryOutline")
-		if existing_wall is MeshInstance3D:
-			_wall_boundary_outline_instance = existing_wall
-		else:
-			_wall_boundary_outline_instance = MeshInstance3D.new()
-			_wall_boundary_outline_instance.name = "WallBoundaryOutline"
-			_wall_boundary_outline_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			add_child(_wall_boundary_outline_instance)
-		_wall_boundary_outline_instance.owner = null
-
-	if _seam_outline_instance == null:
-		var existing_seam := get_node_or_null("SeamOutline")
-		if existing_seam is MeshInstance3D:
-			_seam_outline_instance = existing_seam
-		else:
-			_seam_outline_instance = MeshInstance3D.new()
-			_seam_outline_instance.name = "SeamOutline"
-			_seam_outline_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			add_child(_seam_outline_instance)
-		_seam_outline_instance.owner = null
-
-	# Clean up any accidental duplicates (can happen if older versions saved these into the scene).
-	for child in get_children():
-		if child is MeshInstance3D and child.name == "WallBoundaryOutline" and child != _wall_boundary_outline_instance:
-			child.queue_free()
-		elif child is MeshInstance3D and child.name == "SeamOutline" and child != _seam_outline_instance:
-			child.queue_free()
-	
-	if _wall_boundary_outline_material == null:
-		_wall_boundary_outline_material = ShaderMaterial.new()
-		_wall_boundary_outline_material.shader = preload("res://addons/MarchingSquaresTerrain/resources/shaders/mst_wall_boundary_outline.gdshader")
-		_wall_boundary_outline_material.set_shader_parameter("opacity", 0.85)
-		_wall_boundary_outline_material.set_shader_parameter("value_contrast", 1.25)
-		_wall_boundary_outline_material.set_shader_parameter("tint", Vector3(1, 1, 1))
-		# Set per-regeneration based on the computed wall width.
-		_wall_boundary_outline_material.set_shader_parameter("sample_offset_world", 0.0)
-		_wall_boundary_outline_material.render_priority = 2
-		# Keep depth test on; we avoid z-fighting via a small normal offset.
-
-	if _seam_outline_material == null:
-		_seam_outline_material = ShaderMaterial.new()
-		_seam_outline_material.shader = preload("res://addons/MarchingSquaresTerrain/resources/shaders/mst_wall_boundary_outline.gdshader")
-		_seam_outline_material.set_shader_parameter("opacity", 0.80)
-		_seam_outline_material.set_shader_parameter("value_contrast", 1.35)
-		_seam_outline_material.set_shader_parameter("tint", Vector3(1, 1, 1))
-		# Seam can sample directly under the strip.
-		_seam_outline_material.set_shader_parameter("sample_offset_world", 0.0)
-		_seam_outline_material.render_priority = 2
-		# Keep depth test on; we avoid z-fighting via a small normal offset.
+func _cleanup_old_chunk_outline_overlays() -> void:
+	# Option 2 (Chunk Outline) was removed. Old scenes might still have these generated overlay nodes.
+	for legacy_name in ["WallBoundaryOutline", "SeamOutline"]:
+		var n := get_node_or_null(legacy_name)
+		if n:
+			n.queue_free()
 
 
-func regenerate_wall_boundary_outline() -> void:
-	# Only when the feature is enabled on the parent terrain system.
-	var _outline_mode: int = int(terrain_system.outline_mode) if terrain_system else 0
-	if _outline_mode != 2:
-		if _wall_boundary_outline_instance:
-			_wall_boundary_outline_instance.mesh = null
-		if _seam_outline_instance:
-			_seam_outline_instance.mesh = null
+func apply_internal_edge_outline_settings(enabled: bool, px: float) -> void:
+	if not enabled or px <= 0.0:
+		if _internal_outline_instance:
+			_internal_outline_instance.mesh = null
+			_internal_outline_instance.visible = false
 		return
-	if cell_geometry == null or cell_geometry.is_empty():
-		# Ensure stale overlays are cleared even if geometry isn't ready.
-		if _wall_boundary_outline_instance:
-			_wall_boundary_outline_instance.mesh = null
-		if _seam_outline_instance:
-			_seam_outline_instance.mesh = null
-		return
-	
-	_ensure_wall_boundary_outline_instance()
-	
-	# Collect edges for:
-	#  - wall boundary outline: edges used by exactly 1 wall triangle.
-	#  - wall crease outline: edges shared by 2 wall tris with a sharp normal change.
-	#  - floor/wall seam outline: edges shared by >=1 floor tri and >=1 wall tri.
-	var wall_edge_counts: Dictionary = {}
-	var wall_edge_points: Dictionary = {}
-	# Store ALL contributing wall-triangle normals/interior directions per edge.
-	# This lets us outline sharp creases (direction changes) without outlining flat faces.
-	var wall_edge_normals: Dictionary = {}   # k -> Array[Vector3]
-	var wall_edge_interior: Dictionary = {}  # k -> Array[Vector3]
+	_ensure_internal_edge_outline_instance()
+	_internal_outline_instance.visible = true
+	if _internal_outline_material:
+		_internal_outline_material.set_shader_parameter("outline_px", px)
+	# If toggled on after being off, we need to rebuild once.
+	if _internal_outline_instance.mesh == null:
+		_regenerate_internal_edge_outline_mesh()
 
-	var seam_floor_counts: Dictionary = {}
-	var seam_wall_counts: Dictionary = {}
-	var seam_edge_points: Dictionary = {}
-	var seam_floor_normals: Dictionary = {}
-	
-	# More tolerant quantization reduces "phantom" boundary edges (wall stripes) when adjacent cells
-	# don't share vertices exactly (T-junctions / float noise).
-	var quant_step: float = maxf(0.0005, minf(cell_size.x, cell_size.y) * 0.01) # ~1% of a cell
+
+func _ensure_internal_edge_outline_instance() -> void:
+	if _internal_outline_instance == null:
+		var existing := get_node_or_null("InternalEdgeOutline")
+		if existing is MeshInstance3D:
+			_internal_outline_instance = existing
+		else:
+			_internal_outline_instance = MeshInstance3D.new()
+			_internal_outline_instance.name = "InternalEdgeOutline"
+			_internal_outline_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			add_child(_internal_outline_instance)
+		_internal_outline_instance.owner = null
+
+	if _internal_outline_material == null:
+		_internal_outline_material = ShaderMaterial.new()
+		_internal_outline_material.shader = _INTERNAL_OUTLINE_SHADER
+		_internal_outline_material.set_shader_parameter("outline_color", Color(0, 0, 0, 1))
+		_internal_outline_material.set_shader_parameter("outline_px", 2.0)
+		_internal_outline_material.set_shader_parameter("depth_bias", 0.00035)
+		_internal_outline_material.render_priority = 3
+
+
+func _quant_v3i(v: Vector3, quant_scale: float) -> Vector3i:
+	return Vector3i(
+		int(round(v.x * quant_scale)),
+		int(round(v.y * quant_scale)),
+		int(round(v.z * quant_scale))
+	)
+
+
+func _v3i_greater(a: Vector3i, b: Vector3i) -> bool:
+	if a.x != b.x:
+		return a.x > b.x
+	if a.y != b.y:
+		return a.y > b.y
+	return a.z > b.z
+
+
+func _edge_key(a: Vector3, b: Vector3, quant_scale: float) -> String:
+	# Order-independent, quantized edge key so A-B equals B-A.
+	var qa := _quant_v3i(a, quant_scale)
+	var qb := _quant_v3i(b, quant_scale)
+	if _v3i_greater(qa, qb):
+		var t := qa
+		qa = qb
+		qb = t
+	return "%d,%d,%d|%d,%d,%d" % [qa.x, qa.y, qa.z, qb.x, qb.y, qb.z]
+
+
+func _accum_internal_edge(a: Vector3, b: Vector3, tri_is_floor: bool, quant_scale: float,
+		edge_points: Dictionary, floor_counts: Dictionary, wall_counts: Dictionary) -> void:
+	var k = _edge_key(a, b, quant_scale)
+	if not edge_points.has(k):
+		edge_points[k] = [a, b]
+	if tri_is_floor:
+		floor_counts[k] = int(floor_counts.get(k, 0)) + 1
+	else:
+		wall_counts[k] = int(wall_counts.get(k, 0)) + 1
+
+
+func _regenerate_internal_edge_outline_mesh() -> void:
+	if terrain_system == null:
+		return
+
+	var enabled := (int(terrain_system.outline_mode) == int(MarchingSquaresTerrain.OutlineMode.BLACK_SILHOUETTE))
+	var px := float(terrain_system.outline_px)
+	if not enabled or px <= 0.0:
+		apply_internal_edge_outline_settings(false, 0.0)
+		return
+
+	_ensure_internal_edge_outline_instance()
+	apply_internal_edge_outline_settings(true, px)
+
+	var have_cell_geo := not (cell_geometry == null or cell_geometry.is_empty())
+	if not have_cell_geo:
+		_internal_outline_instance.mesh = null
+		return
+
+	var edge_points: Dictionary = {}
+	var floor_counts: Dictionary = {}
+	var wall_counts: Dictionary = {}
+
+	# Quantize to stabilize shared edge keys across tiny float differences.
+	# Keep this very small so we don't accidentally merge nearby-but-distinct edges.
+	var quant_step: float = 0.0005
 	var quant_scale: float = 1.0 / quant_step
-	var q := func(p: Vector3) -> Vector3i:
-		return Vector3i(int(round(p.x * quant_scale)), int(round(p.y * quant_scale)), int(round(p.z * quant_scale)))
-	
-	var edge_key := func(a: Vector3, b: Vector3) -> String:
-		var qa: Vector3i = q.call(a)
-		var qb: Vector3i = q.call(b)
-		var swap := false
-		if qa.x > qb.x: swap = true
-		elif qa.x == qb.x and qa.y > qb.y: swap = true
-		elif qa.x == qb.x and qa.y == qb.y and qa.z > qb.z: swap = true
-		if swap:
-			var tmp = qa
-			qa = qb
-			qb = tmp
-		return str(qa.x) + "," + str(qa.y) + "," + str(qa.z) + "|" + str(qb.x) + "," + str(qb.y) + "," + str(qb.z)
 
-	var add_wall_edge := func(a: Vector3, b: Vector3, c: Vector3, n: Vector3) -> void:
-		var k: String = edge_key.call(a, b)
-		wall_edge_counts[k] = int(wall_edge_counts.get(k, 0)) + 1
-		if not wall_edge_points.has(k):
-			wall_edge_points[k] = [a, b]
-		
-		# Interior direction: from edge midpoint toward the triangle's third vertex,
-		# projected to be perpendicular to the edge direction.
-		var interior := Vector3.ZERO
-		var dir := (b - a)
-		var len2 := dir.length_squared()
-		if len2 > 0.0000001:
-			dir /= sqrt(len2)
-			var mid := (a + b) * 0.5
-			var to_c := c - mid
-			to_c -= dir * to_c.dot(dir)
-			if to_c.length_squared() > 0.0000001:
-				interior = to_c.normalized()
-		
-		var normals_arr: Array = wall_edge_normals.get(k, [])
-		normals_arr.append(n)
-		wall_edge_normals[k] = normals_arr
-		var interior_arr: Array = wall_edge_interior.get(k, [])
-		interior_arr.append(interior)
-		wall_edge_interior[k] = interior_arr
-
-	var add_seam_edge := func(a: Vector3, b: Vector3, n: Vector3, is_wall: bool) -> void:
-		var k: String = edge_key.call(a, b)
-		if not seam_edge_points.has(k):
-			seam_edge_points[k] = [a, b]
-		if is_wall:
-			seam_wall_counts[k] = int(seam_wall_counts.get(k, 0)) + 1
-		else:
-			seam_floor_counts[k] = int(seam_floor_counts.get(k, 0)) + 1
-			if not seam_floor_normals.has(k):
-				seam_floor_normals[k] = n
-	
 	for cell_coords in cell_geometry.keys():
-		var verts: PackedVector3Array = cell_geometry[cell_coords]["verts"]
-		var is_floor_arr: PackedByteArray = cell_geometry[cell_coords]["is_floor"]
+		var verts: PackedVector3Array = cell_geometry[cell_coords].get("verts", PackedVector3Array())
+		var is_floor_arr: Array = cell_geometry[cell_coords].get("is_floor", [])
+		var has_is_floor := is_floor_arr != null and is_floor_arr.size() == verts.size()
 		var tri_count: int = verts.size() / 3
 		for t in range(tri_count):
 			var i := t * 3
-			var is_wall_tri := not (bool(is_floor_arr[i]) or bool(is_floor_arr[i + 1]) or bool(is_floor_arr[i + 2]))
 			var p0: Vector3 = verts[i]
 			var p1: Vector3 = verts[i + 1]
 			var p2: Vector3 = verts[i + 2]
-			var n: Vector3 = (p1 - p0).cross(p2 - p0)
-			if n.length_squared() < 0.0000001:
-				continue
-			n = n.normalized()
+			var tri_is_floor := bool(is_floor_arr[i]) if has_is_floor else true
+			_accum_internal_edge(p0, p1, tri_is_floor, quant_scale, edge_points, floor_counts, wall_counts)
+			_accum_internal_edge(p1, p2, tri_is_floor, quant_scale, edge_points, floor_counts, wall_counts)
+			_accum_internal_edge(p2, p0, tri_is_floor, quant_scale, edge_points, floor_counts, wall_counts)
 
-			if is_wall_tri:
-				add_wall_edge.call(p0, p1, p2, n)
-				add_wall_edge.call(p1, p2, p0, n)
-				add_wall_edge.call(p2, p0, p1, n)
+	var st_outline := SurfaceTool.new()
+	st_outline.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-			add_seam_edge.call(p0, p1, n, is_wall_tri)
-			add_seam_edge.call(p1, p2, n, is_wall_tri)
-			add_seam_edge.call(p2, p0, n, is_wall_tri)
+	var c_neg := Color(0, 0, 0, 1) # COLOR.r < 0.5 => -1 side
+	var c_pos := Color(1, 0, 0, 1) # COLOR.r >= 0.5 => +1 side
 
-	# --- Wall boundary outline mesh ---
-	var st_wall := SurfaceTool.new()
-	st_wall.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var avg_cell := (cell_size.x + cell_size.y) * 0.5
-	var wall_width: float = clampf(terrain_system.outline_width * 0.002 * avg_cell, 0.001, 0.05)
-	# Sample just inside the wall face so the outline matches wall hue + lighting (instead of outside pixels).
-	if _wall_boundary_outline_material:
-		_wall_boundary_outline_material.set_shader_parameter("sample_offset_world", clampf(wall_width * 0.8, 0.001, 0.02))
-	# Small constant offset to prevent z-fighting (do NOT scale with width or it will "float" away at high outline widths).
-	var wall_offset: float = maxf(0.0005, avg_cell * 0.001)
-	
-	var add_wall_quad := func(a: Vector3, b: Vector3, n: Vector3, interior: Vector3) -> void:
-		if interior.length_squared() < 0.0000001:
-			return
-		# One-sided strip: sits on the wall face side only.
-		var p0: Vector3 = a + n * wall_offset
-		var p1: Vector3 = b + n * wall_offset
-		var v0: Vector3 = p0
-		var v1: Vector3 = p0 + interior * (wall_width * 2.0)
-		var v2: Vector3 = p1 + interior * (wall_width * 2.0)
-		var v3: Vector3 = p1
-		
-		# Encode the interior direction for the shader (0..1).
-		var col := Color(interior.x * 0.5 + 0.5, interior.y * 0.5 + 0.5, interior.z * 0.5 + 0.5, 1.0)
-		
-		st_wall.set_normal(n)
-		st_wall.set_color(col)
-		st_wall.add_vertex(v0)
-		st_wall.set_normal(n)
-		st_wall.set_color(col)
-		st_wall.add_vertex(v1)
-		st_wall.set_normal(n)
-		st_wall.set_color(col)
-		st_wall.add_vertex(v2)
-		st_wall.set_normal(n)
-		st_wall.set_color(col)
-		st_wall.add_vertex(v0)
-		st_wall.set_normal(n)
-		st_wall.set_color(col)
-		st_wall.add_vertex(v2)
-		st_wall.set_normal(n)
-		st_wall.set_color(col)
-		st_wall.add_vertex(v3)
-	
-	var crease_cos := cos(deg_to_rad(35.0))
-	for k in wall_edge_counts.keys():
-		var count := int(wall_edge_counts[k])
-		var pts: Array = wall_edge_points[k]
+	for k in edge_points.keys():
+		var wc := int(wall_counts.get(k, 0))
+		var fc := int(floor_counts.get(k, 0))
+		# Draw seams (floor<->wall) and wall boundary edges (outer wall contour & step walls).
+		if not ((wc > 0 and fc > 0) or wc == 1):
+			continue
+		var pts: Array = edge_points[k]
 		var a: Vector3 = pts[0]
 		var b: Vector3 = pts[1]
-
-		var normals_arr: Array = wall_edge_normals.get(k, [])
-		var interior_arr: Array = wall_edge_interior.get(k, [])
-
-		if count == 1:
-			# Outer boundary.
-			var n: Vector3 = normals_arr[0] if normals_arr.size() > 0 else Vector3.UP
-			var interior: Vector3 = interior_arr[0] if interior_arr.size() > 0 else Vector3.ZERO
-			# Some wall triangles can wind inconsistently; generate the strip on both normal directions.
-			add_wall_quad.call(a, b, n, interior)
-			add_wall_quad.call(a, b, -n, interior)
+		var d: Vector3 = b - a
+		var dl2 := d.length_squared()
+		if dl2 < 1e-10:
 			continue
+		d = d / sqrt(dl2)
 
-		if count == 2 and normals_arr.size() >= 2:
-			# Sharp crease between two wall faces (outline between shapes/directions).
-			var d := absf(normals_arr[0].dot(normals_arr[1]))
-			if d < crease_cos:
-				var emit_count := mini(normals_arr.size(), interior_arr.size())
-				for i in range(emit_count):
-					var n: Vector3 = normals_arr[i]
-					var interior: Vector3 = interior_arr[i]
-					add_wall_quad.call(a, b, n, interior)
-					add_wall_quad.call(a, b, -n, interior)
-	
-	var wall_mesh: ArrayMesh = st_wall.commit()
-	if wall_mesh == null or wall_mesh.get_surface_count() == 0:
-		_wall_boundary_outline_instance.mesh = null
-	else:
-		_wall_boundary_outline_instance.mesh = wall_mesh
-		if _wall_boundary_outline_material:
-			wall_mesh.surface_set_material(0, _wall_boundary_outline_material)
+		# Quad made of two triangles, expanded in shader based on NORMAL (edge dir) + COLOR.r (side).
+		st_outline.set_normal(d)
+		st_outline.set_color(c_neg)
+		st_outline.add_vertex(a)
+		st_outline.set_normal(d)
+		st_outline.set_color(c_neg)
+		st_outline.add_vertex(b)
+		st_outline.set_normal(d)
+		st_outline.set_color(c_pos)
+		st_outline.add_vertex(b)
 
-	# --- Floor/wall seam outline mesh (drawn over the floor) ---
-	var st_seam := SurfaceTool.new()
-	st_seam.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var seam_width: float = clampf(terrain_system.outline_width * 0.0015 * avg_cell, 0.002, 0.04)
-	# Slightly larger constant offset reduces popping/z-fighting when moving.
-	var seam_offset: float = maxf(0.0015, avg_cell * 0.0015)
-	
-	var add_seam_quad := func(a: Vector3, b: Vector3, n: Vector3) -> void:
-		if n.length_squared() < 0.0000001:
-			n = Vector3.UP
-		if n.y < 0.0:
-			n = -n
-		var dir: Vector3 = b - a
-		var len2 := dir.length_squared()
-		if len2 < 0.0000001:
-			return
-		dir = dir / sqrt(len2)
-		var side: Vector3 = n.cross(dir)
-		if side.length_squared() < 0.0000001:
-			return
-		side = side.normalized()
-		
-		var p0: Vector3 = a + n * seam_offset
-		var p1: Vector3 = b + n * seam_offset
-		var v0: Vector3 = p0 - side * seam_width
-		var v1: Vector3 = p0 + side * seam_width
-		var v2: Vector3 = p1 + side * seam_width
-		var v3: Vector3 = p1 - side * seam_width
-		
-		st_seam.set_normal(n)
-		st_seam.add_vertex(v0)
-		st_seam.set_normal(n)
-		st_seam.add_vertex(v1)
-		st_seam.set_normal(n)
-		st_seam.add_vertex(v2)
-		st_seam.set_normal(n)
-		st_seam.add_vertex(v0)
-		st_seam.set_normal(n)
-		st_seam.add_vertex(v2)
-		st_seam.set_normal(n)
-		st_seam.add_vertex(v3)
-	
-	for k in seam_edge_points.keys():
-		var fc := int(seam_floor_counts.get(k, 0))
-		var wc := int(seam_wall_counts.get(k, 0))
-		if fc <= 0 or wc <= 0:
-			continue
-		var pts: Array = seam_edge_points[k]
-		var a: Vector3 = pts[0]
-		var b: Vector3 = pts[1]
-		var nf: Vector3 = seam_floor_normals.get(k, Vector3.UP)
-		add_seam_quad.call(a, b, nf)
-	
-	var seam_mesh: ArrayMesh = st_seam.commit()
-	if seam_mesh == null or seam_mesh.get_surface_count() == 0:
-		_seam_outline_instance.mesh = null
-	else:
-		_seam_outline_instance.mesh = seam_mesh
-		if _seam_outline_material:
-			seam_mesh.surface_set_material(0, _seam_outline_material)
+		st_outline.set_normal(d)
+		st_outline.set_color(c_neg)
+		st_outline.add_vertex(a)
+		st_outline.set_normal(d)
+		st_outline.set_color(c_pos)
+		st_outline.add_vertex(b)
+		st_outline.set_normal(d)
+		st_outline.set_color(c_pos)
+		st_outline.add_vertex(a)
+
+	var outline_mesh: ArrayMesh = st_outline.commit()
+	if outline_mesh == null or outline_mesh.get_surface_count() == 0:
+		_internal_outline_instance.mesh = null
+		return
+
+	_internal_outline_instance.mesh = outline_mesh
+	if _internal_outline_material:
+		outline_mesh.surface_set_material(0, _internal_outline_material)
 
 
 func generate_terrain_cells(use_threads: bool):
@@ -699,6 +559,11 @@ func generate_terrain_cells(use_threads: bool):
 				cell.generate_geometry(cell_coords)
 				if grass_planter and grass_planter.terrain_system:
 					grass_planter.generate_grass_on_cell(cell_coords)
+				# Break RefCounted cycles (cell <-> helper) so temporary objects can be freed.
+				color_helper.cell = null
+				color_helper.chunk = null
+				cell.color_helper = null
+				cell.chunk = null
 			if use_threads:
 				thread_pool.enqueue(work_load)
 			else:
@@ -970,6 +835,31 @@ func get_height(cc: Vector2i) -> float:
 	return height_map[cc.y][cc.x]
 
 
+func _sample_height_bilinear(local_x: float, local_z: float) -> float:
+	# local_x/local_z are in chunk-local space (same as mesh vertices).
+	if height_map == null or height_map.is_empty():
+		return 0.0
+	var max_x: float = (dimensions.x - 1) * cell_size.x
+	var max_z: float = (dimensions.z - 1) * cell_size.y
+	var x := clampf(local_x, 0.0, max_x)
+	var z := clampf(local_z, 0.0, max_z)
+	var fx := x / cell_size.x
+	var fz := z / cell_size.y
+	var x0 := clampi(int(floor(fx)), 0, dimensions.x - 1)
+	var z0 := clampi(int(floor(fz)), 0, dimensions.z - 1)
+	var x1 := clampi(x0 + 1, 0, dimensions.x - 1)
+	var z1 := clampi(z0 + 1, 0, dimensions.z - 1)
+	var tx := fx - float(x0)
+	var tz := fz - float(z0)
+	var h00: float = height_map[z0][x0]
+	var h10: float = height_map[z0][x1]
+	var h01: float = height_map[z1][x0]
+	var h11: float = height_map[z1][x1]
+	var hx0 := lerpf(h00, h10, tx)
+	var hx1 := lerpf(h01, h11, tx)
+	return lerpf(hx0, hx1, tz)
+
+
 func get_color_0(cc: Vector2i) -> Color:
 	return color_map_0[cc.y*dimensions.x + cc.x]
 
@@ -1107,73 +997,113 @@ func _recreate_collision_body() -> void:
 			if group.begins_with("navmesh_"):
 				body.add_to_group(group)
 
+func _ensure_collision_body() -> void:
+		# Reuse a single collision body + shape node to avoid editor tree churn and allocations.
+		if _collision_body != null and is_instance_valid(_collision_body) and _collision_body.get_parent() == self:
+			pass
+		else:
+			_collision_body = null
+			_collision_shape_node = null
+
+		if _collision_body == null:
+			var existing: Array[StaticBody3D] = []
+			for child in get_children():
+				if child is StaticBody3D:
+					existing.append(child)
+			if existing.size() > 0:
+				_collision_body = existing[0]
+				for i in range(1, existing.size()):
+					existing[i].queue_free()
+			else:
+				_collision_body = StaticBody3D.new()
+				add_child(_collision_body)
+
+		_collision_body.name = name + "_col"
+
+		var shapes: Array[CollisionShape3D] = []
+		for c in _collision_body.get_children():
+			if c is CollisionShape3D:
+				shapes.append(c)
+		if shapes.size() > 0:
+			_collision_shape_node = shapes[0]
+			for i in range(1, shapes.size()):
+				shapes[i].queue_free()
+		else:
+			_collision_shape_node = CollisionShape3D.new()
+			_collision_shape_node.name = "CollisionShape3D"
+			_collision_body.add_child(_collision_shape_node)
+
+		_collision_shape_node.visible = false
+
+		if EngineWrapper.instance.is_editor():
+			var scene_root = EngineWrapper.instance.get_root_for_node(self)
+			if scene_root:
+				_collision_body.owner = scene_root
+				_collision_shape_node.owner = scene_root
+			for group in get_groups():
+				if group.begins_with("navmesh_"):
+					_collision_body.add_to_group(group)
+
+
 # This just redoes the create_trimesh but adds depth up to 1 unit
 func create_collision_with_depth(depth: float) -> void:
-	if depth <= 0.0:
-		create_trimesh_collision()
+		if mesh == null:
+			return
+		_ensure_collision_body()
+
+		var surface_faces: PackedVector3Array = mesh.get_faces()
+		var all_faces: PackedVector3Array = surface_faces
+
+		if depth > 0.0:
+			var extra_faces := PackedVector3Array()
+			var thr: float = terrain_system.wall_threshold if terrain_system else 0.25
+			var i := 0
+			while i < surface_faces.size():
+				var v0 := surface_faces[i]
+				var v1 := surface_faces[i + 1]
+				var v2 := surface_faces[i + 2]
+				var normal := (v1 - v0).cross(v2 - v0).normalized()
+				if absf(normal.y) > thr:
+					var d := Vector3(0, -depth, 0)
+					var v0b := v0 + d
+					var v1b := v1 + d
+					var v2b := v2 + d
+					# Bottom face (flipped winding)
+					extra_faces.append_array([v0b, v2b, v1b])
+					# Side walls
+					extra_faces.append_array([v0, v1, v1b, v0, v1b, v0b])
+					extra_faces.append_array([v1, v2, v2b, v1, v2b, v1b])
+					extra_faces.append_array([v2, v0, v0b, v2, v0b, v2b])
+				i += 3
+
+			all_faces = PackedVector3Array()
+			all_faces.append_array(surface_faces)
+			all_faces.append_array(extra_faces)
+
+		var shape := ConcavePolygonShape3D.new()
+		shape.set_faces(all_faces)
+		_collision_shape_node.shape = shape
+
 		_apply_collision_layers()
-		return
-	
-	var surface_faces := mesh.get_faces()
-	var extra_faces := PackedVector3Array()
-	
-	var i := 0
-	while i < surface_faces.size():
-		var v0 := surface_faces[i]
-		var v1 := surface_faces[i + 1]
-		var v2 := surface_faces[i + 2]
-		var normal := (v1 - v0).cross(v2 - v0).normalized()
-		
-		if absf(normal.y) > terrain_system.wall_threshold:
-			var d := Vector3(0, -depth, 0)
-			var v0b := v0 + d
-			var v1b := v1 + d
-			var v2b := v2 + d
-			# Bottom face (flipped winding)
-			extra_faces.append_array([v0b, v2b, v1b])
-			# Side walls
-			extra_faces.append_array([v0, v1, v1b, v0, v1b, v0b])
-			extra_faces.append_array([v1, v2, v2b, v1, v2b, v1b])
-			extra_faces.append_array([v2, v0, v0b, v2, v0b, v2b])
-		i += 3
-		
-	var all_faces := PackedVector3Array()
-	all_faces.append_array(surface_faces)
-	all_faces.append_array(extra_faces)
-	
-	var shape := ConcavePolygonShape3D.new()
-	shape.set_faces(all_faces)
-	
-	for child in get_children():
-		if child is StaticBody3D:
-			child.free()
-	
-	var body := StaticBody3D.new()
-	body.name = name + "_col"
-	var col_shape := CollisionShape3D.new()
-	col_shape.name = "CollisionShape3D"
-	col_shape.shape = shape
-	col_shape.visible = false
-	body.add_child(col_shape)
-	add_child(body)
-	
-	if EngineWrapper.instance.is_editor():
-		var scene_root = EngineWrapper.instance.get_root_for_node(self)
-		if scene_root:
-			body.owner = scene_root
-			col_shape.owner = scene_root
-	
-	_apply_collision_layers()
 
 
 func _apply_collision_layers() -> void:
-	for child in get_children():
-		if child is StaticBody3D:
-			child.collision_layer = 17
-			child.set_collision_layer_value(terrain_system.extra_collision_layer, true)
-			for _child in child.get_children():
-				if _child is CollisionShape3D:
-					_child.set_visible(false)
+		if _collision_body != null and is_instance_valid(_collision_body):
+			_collision_body.collision_layer = 17
+			if terrain_system:
+				_collision_body.set_collision_layer_value(terrain_system.extra_collision_layer, true)
+			if _collision_shape_node != null and is_instance_valid(_collision_shape_node):
+				_collision_shape_node.visible = false
+			return
+		# Legacy fallback (shouldn't happen, but keep it safe).
+		for child in get_children():
+			if child is StaticBody3D:
+				child.collision_layer = 17
+				if terrain_system:
+					child.set_collision_layer_value(terrain_system.extra_collision_layer, true)
+				for _child in child.get_children():
+					if _child is CollisionShape3D:
+						_child.set_visible(false)
 
 
 func regenerate_all_cells(use_threads: bool):

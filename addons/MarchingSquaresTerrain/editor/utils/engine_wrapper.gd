@@ -1,12 +1,17 @@
-extends Object
+extends RefCounted
 class_name EngineWrapper
 
 
+static var _editor_instance: EngineWrapper
+
 static var instance : EngineWrapper:
 	get:
-		if not instance:
-			instance = EngineWrapper.new()
-		return instance
+		if Engine.is_editor_hint():
+			if _editor_instance == null:
+				_editor_instance = EngineWrapper.new()
+			return _editor_instance
+		# Avoid holding a static reference in runtime/headless (prevents shutdown leak warnings).
+		return EngineWrapper.new()
 
 
 func is_editor() -> bool:

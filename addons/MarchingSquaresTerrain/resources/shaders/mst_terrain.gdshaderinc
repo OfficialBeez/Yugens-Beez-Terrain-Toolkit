@@ -15,8 +15,10 @@ group_uniforms Visuals.Palette;
 uniform sampler2D palette_colors_tex : filter_nearest;
 uniform sampler2D palette_weights_tex : filter_nearest;
 uniform sampler2D palette_meta_tex : filter_nearest;
+// Per-slot outline widths (stored as raw width values in .r).
+uniform sampler2D palette_outline_width_tex : filter_nearest;
 
-// Controls outline thickness. Higher = thicker.
+// Legacy global outline width (kept for backwards-compat / inspector-only tweaking).
 uniform float outline_width : hint_range(0.25, 32.0, 0.25) = 6.0;
 
 group_uniforms;
@@ -67,58 +69,10 @@ uniform int bands : hint_range(1, 10) = 5;
 uniform float shadow_intensity : hint_range(-1.0, 0.5, 0.05) = 0.00;
 group_uniforms;
 
-group_uniforms Visuals.Edge_Highlights;
-uniform bool use_edge_highlights = false;
-// Screen-space edge outlines (toon style).
-uniform vec4 edge_highlight_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform float edge_highlight_strength : hint_range(0.0, 1.0, 0.01) = 0.35;
-// Higher = thicker / more sensitive.
-uniform float edge_highlight_width : hint_range(0.0, 32.0, 0.25) = 10.0;
-// Higher = harder edge (more ink-like).
-uniform float edge_highlight_power : hint_range(0.1, 8.0, 0.1) = 2.0;
-// Thresholding to avoid the "white wash" effect.
-uniform float edge_highlight_threshold : hint_range(0.0, 5.0, 0.01) = 0.65;
-uniform float edge_highlight_softness : hint_range(0.0, 1.0, 0.001) = 0.02;
-// Allow separating silhouette (depth) vs crease (normal) edges.
-uniform float edge_highlight_normal_weight : hint_range(0.0, 4.0, 0.05) = 1.0;
-
-// Depth-based band-pass for "inner" outlines (step edges).
-// We use view-space depth derivatives; scale/thresholds are tuned per project.
-uniform float inner_outline_depth_scale : hint_range(0.0, 50000.0, 50.0) = 12000.0;
-// Turns on at this depth-edge magnitude.
-uniform float inner_outline_threshold : hint_range(0.0, 10.0, 0.01) = 0.55;
-uniform float inner_outline_softness : hint_range(0.0, 2.0, 0.001) = 0.05;
-// Reject very large depth discontinuities (outer silhouette).
-uniform float inner_outline_silhouette_threshold : hint_range(0.0, 50.0, 0.01) = 2.0;
-uniform float inner_outline_silhouette_softness : hint_range(0.0, 5.0, 0.001) = 0.10;
-
-group_uniforms;
-
-group_uniforms Visuals.Seam_Outline;
-// Stable, mesh-driven outline at the floor/wall seam (no screen-space jitter).
-uniform bool use_seam_outline = false;
-
-// When seam_outline_from_albedo is false, this is the absolute outline color.
-// When true, RGB acts as a multiplier and A is treated as opacity.
-uniform vec4 seam_outline_color : source_color = vec4(1.0, 1.0, 1.0, 0.9);
-
-// If true, derive the outline color from the underlying surface ALBEDO (preserves hue)
-// and optionally lift/darken it via seam_outline_lift.
-uniform bool seam_outline_from_albedo = false;
-
-// -1..1 value shift applied to the derived outline color.
-//  >0 lifts toward white (pastel), <0 pushes toward black.
-uniform float seam_outline_lift : hint_range(-1.0, 1.0, 0.01) = 0.35;
-
-uniform float seam_outline_width : hint_range(0.0, 32.0, 0.25) = 2.0;
-uniform float seam_outline_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
-
-group_uniforms;
 
 varying vec3 vertex_normal;
 varying vec3 custom1;
 varying flat float nearest_wall_color_idx;
-varying flat float seam_flag;
 varying vec3 world_pos;
 #ifdef BAKE_MODE
 varying vec3 virtual_vertex;
@@ -287,6 +241,12 @@ int _palette_has_outline(int slot) {
 
 int _palette_outline_mode(int slot) {
 	return int(round(_palette_meta(slot).a * 255.0));
+}
+
+float _palette_outline_width(int slot) {
+	slot = clamp(slot, 0, 255);
+	float v = (float(slot) + 0.5) / 256.0;
+	return max(texture(palette_outline_width_tex, vec2(0.5, v)).r, 0.25);
 }
 
 vec4 sample_palette_entry(int slot, int color_idx) {
@@ -505,7 +465,6 @@ void vertex() {
 	custom1 = CUSTOM1.rgb;
 	float a = CUSTOM1.a;
 	nearest_wall_color_idx = floor(a);
-	seam_flag = step(0.25, fract(a));
 #ifndef BAKE_MODE
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 #else
@@ -707,56 +666,6 @@ void fragment() {
 		ALBEDO = mix(floor_color.rgb, rl_x + rl_z, mixed_blend_factor);
 	}
 
-	// Inner outlines (white): screen-space variant (can be jittery). Kept for optional use.
-	if (use_edge_highlights && is_floor) {
-		float dz = abs(dFdx(FRAGCOORD.z)) + abs(dFdy(FRAGCOORD.z));
-		float dzm = dz * max(inner_outline_depth_scale, 0.0);
-
-		float inner = smoothstep(inner_outline_threshold, inner_outline_threshold + max(inner_outline_softness, 0.00001), dzm);
-		float sil = smoothstep(inner_outline_silhouette_threshold, inner_outline_silhouette_threshold + max(inner_outline_silhouette_softness, 0.00001), dzm);
-		inner *= (1.0 - sil);
-
-		vec3 n = normalize(vertex_normal);
-		float dn = (length(dFdx(n)) + length(dFdy(n))) * edge_highlight_normal_weight;
-		float crease = smoothstep(edge_highlight_threshold, edge_highlight_threshold + max(edge_highlight_softness, 0.00001), dn * (max(edge_highlight_width, 0.0) * 0.35));
-
-		float mask = clamp(max(inner, crease), 0.0, 1.0);
-		mask = pow(mask, edge_highlight_power);
-
-		float amt = clamp(mask * edge_highlight_strength, 0.0, 1.0);
-		ALBEDO = mix(ALBEDO, edge_highlight_color.rgb, amt);
-	}
-
-	// Stable outline at floor/wall junction + along wall face edges.
-	// seam_flag ensures we only draw this where the cell actually contains a wall/cliff.
-	if (use_seam_outline && seam_flag > 0.5) {
-		float amt = 0.0;
-		if (is_floor) {
-			// Floor rim: thin band at the terrace edge.
-			float t = max(UV.x, UV.y);
-			float band = max(fwidth(t) * seam_outline_width, 0.0001);
-			amt = smoothstep(1.0 - band, 1.0, t);
-		} else {
-			// Walls: outer-boundary outline is generated by a separate mesh (to avoid per-cell striping).
-			amt = 0.0;
-		}
-		amt = clamp(amt * seam_outline_strength, 0.0, 1.0);
-
-		vec3 target_rgb = seam_outline_color.rgb;
-		if (seam_outline_from_albedo) {
-			vec3 base = ALBEDO;
-			vec3 lifted = base;
-			if (seam_outline_lift > 0.0) {
-				lifted = mix(base, vec3(1.0), seam_outline_lift);
-			} else if (seam_outline_lift < 0.0) {
-				lifted = mix(base, vec3(0.0), -seam_outline_lift);
-			}
-			// Allow a subtle tint bias while still preserving hue by default (rgb = 1,1,1).
-			target_rgb = lifted * seam_outline_color.rgb;
-		}
-
-		ALBEDO = mix(ALBEDO, target_rgb, amt * seam_outline_color.a);
-	}
 
 	// Material outlines ("land foam" style). Uses weight equality band, so it doesn't widen with brush falloff.
 	if (is_floor) {
@@ -777,7 +686,7 @@ void fragment() {
 				float diff = edge_weight_a - edge_weight_b;
 				float d = abs(diff);
 				float fw = fwidth(diff);
-				float band = max(fw * outline_width, 0.0001);
+				float band = max(fw * _palette_outline_width(outline_slot), 0.0001);
 				float mask = 1.0 - smoothstep(0.0, band, d);
 				mask *= smoothstep(0.0, 0.15, min_w);
 

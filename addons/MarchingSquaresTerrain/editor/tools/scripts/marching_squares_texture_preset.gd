@@ -24,3 +24,4 @@ class_name MarchingSquaresTexturePreset
 # slot_outline_modes[slot]: 0 = darken Color 1, 1 = use last palette color
 @export var slot_has_outline: Array[bool] = [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false]
 @export var slot_outline_modes: Array[int] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+@export var slot_outline_widths: Array[float] = [6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0, 6.0]

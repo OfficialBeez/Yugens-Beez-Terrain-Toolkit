@@ -273,9 +273,6 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"grass_size_variation":
 			if p_value is float or p_value is int:
 				terrain.grass_size_variation = float(p_value)
-		"grass_size_variation_commit":
-			if p_value is bool and p_value:
-				terrain.rebuild_grass_now = true
 		"use_flat_normals":
 			if p_value is bool:
 				terrain.use_flat_normals = p_value
@@ -288,6 +285,9 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"outline_mode":
 			if p_value is int or p_value is float:
 				terrain.outline_mode = int(p_value)
+		"outline_px":
+			if p_value is float or p_value is int:
+				terrain.outline_px = float(p_value)
 		"ridge_threshold":
 			if p_value is float:
 				terrain.ridge_threshold = p_value

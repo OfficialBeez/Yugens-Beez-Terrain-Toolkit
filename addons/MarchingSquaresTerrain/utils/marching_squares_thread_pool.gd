@@ -1,4 +1,4 @@
-extends Object
+extends RefCounted
 class_name MarchingSquaresThreadPool
 
 
@@ -16,11 +16,19 @@ func start():
 	if task_id != -1:
 		push_error("Already running")
 		return
+	if job_queue.is_empty():
+		return
 	task_id = WorkerThreadPool.add_group_task(_worker_loop, job_queue.size())
 
 
 func wait():
+	if task_id == -1:
+		job_queue.clear()
+		return
 	WorkerThreadPool.wait_for_group_task_completion(task_id)
+	# Release captured callables/references ASAP to avoid shutdown leak warnings.
+	task_id = -1
+	job_queue.clear()
 
 
 func enqueue(job: Callable):

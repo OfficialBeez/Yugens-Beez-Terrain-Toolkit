@@ -147,6 +147,19 @@ func _ensure_terrain_arrays(terrain: Object) -> bool:
 				slot_outline_modes[i] = 0
 			slot_outline_modes[i] = clampi(int(slot_outline_modes[i]), 0, 1)
 	
+	var slot_outline_widths := terrain.get("slot_outline_widths")
+	if slot_outline_widths is Array:
+		if slot_outline_widths.size() != MAX_TEXTURE_SLOTS:
+			slot_outline_widths.resize(MAX_TEXTURE_SLOTS)
+		var default_w := 6.0
+		var ow := terrain.get("outline_width")
+		if ow is float or ow is int:
+			default_w = float(ow)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_outline_widths[i] == null:
+				slot_outline_widths[i] = default_w
+			slot_outline_widths[i] = clampf(float(slot_outline_widths[i]), 0.25, 32.0)
+	
 	return true
 
 
@@ -253,6 +266,9 @@ func add_texture_settings() -> void:
 				terrain.slot_has_outline[p_idx] = false
 			if p_idx >= 0 and p_idx < terrain.slot_outline_modes.size():
 				terrain.slot_outline_modes[p_idx] = 0
+			if p_idx >= 0 and p_idx < terrain.slot_outline_widths.size():
+				var ow := terrain.get("outline_width")
+				terrain.slot_outline_widths[p_idx] = float(ow) if (ow is float or ow is int) else 6.0
 			
 			# Keep legacy properties in sync for slots 1..15 so presets save correctly.
 			if p_idx >= 0 and p_idx < 15:
@@ -623,11 +639,35 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 	outline_mode_hbox.visible = outline_cb.button_pressed
 	vbox.add_child(outline_mode_hbox, true)
 
+	var outline_width_hbox := HBoxContainer.new()
+	outline_width_hbox.set_custom_minimum_size(Vector2(150, 20))
+	var outline_width_label := Label.new()
+	outline_width_label.text = "Width:"
+	outline_width_label.set_custom_minimum_size(Vector2(50, 20))
+	outline_width_hbox.add_child(outline_width_label)
+
+	var outline_width_slider := EditorSpinSlider.new()
+	outline_width_slider.set_flat(true)
+	outline_width_slider.set_min(0.25)
+	outline_width_slider.set_max(32.0)
+	outline_width_slider.set_step(0.25)
+	outline_width_slider.set_value(float(terrain.slot_outline_widths[slot]))
+	outline_width_slider.value_changed.connect(func(value):
+		terrain.slot_outline_widths[slot] = float(value)
+		terrain._rebuild_palette_uniforms()
+		terrain.save_to_preset()
+	)
+	outline_width_slider.set_custom_minimum_size(Vector2(95, 25))
+	outline_width_hbox.add_child(outline_width_slider)
+	outline_width_hbox.visible = outline_cb.button_pressed
+	vbox.add_child(outline_width_hbox, true)
+
 	outline_cb.toggled.connect(func(pressed):
 		terrain.slot_has_outline[slot] = pressed
 		terrain._rebuild_palette_uniforms()
 		terrain.save_to_preset()
 		outline_mode_hbox.visible = pressed
+		outline_width_hbox.visible = pressed
 	)
 
 

@@ -40,8 +40,8 @@ var terrain_settings_data : Dictionary = {
 		"wall_threshold": "EditorSpinSlider",
 		"use_flat_normals": "CheckBox",
 		"use_cell_shading": "CheckBox",
-		"outline_width": "EditorSpinSlider",
 		"outline_mode": "OptionButton",
+		"outline_px": "EditorSpinSlider",
 	},
 	"Grass Settings": {
 		"global_noise_texture": "EditorResourcePicker",
@@ -526,6 +526,9 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			elif setting == "outline_width":
 				spin_slider.set_min(0.25)
 				spin_slider.set_max(32.0)
+			elif setting == "outline_px":
+				spin_slider.set_min(0.0)
+				spin_slider.set_max(32.0)
 			elif setting == "global_noise_scroll":
 				spin_slider.set_min(0.0)
 				spin_slider.set_max(1.0)
@@ -534,7 +537,7 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 				spin_slider.set_min(0.005)
 				spin_slider.set_max(1.0)
 			spin_slider.set_step(0.1)
-			if setting == "outline_width":
+			if setting == "outline_width" or setting == "outline_px":
 				spin_slider.set_step(0.25)
 			spin_slider.set_value(s_value if s_value != null else 0.0)
 			spin_slider.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
@@ -577,8 +580,7 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			if setting == "outline_mode":
 				option_button.add_item("Off", 0)
 				option_button.add_item("Black Silhouette", 1)
-				option_button.add_item("Chunk Outline", 2)
-				option_button.select(clampi(int(s_value) if s_value != null else 0, 0, 2))
+				option_button.select(clampi(int(s_value) if s_value != null else 0, 0, 1))
 			elif setting == "default_wall_texture":
 				MarchingSquaresTerrainPlugin._ensure_texture_names_resource(attribute_list.vp_tex_names)
 				var names : Array = attribute_list.vp_tex_names.get("texture_names")
