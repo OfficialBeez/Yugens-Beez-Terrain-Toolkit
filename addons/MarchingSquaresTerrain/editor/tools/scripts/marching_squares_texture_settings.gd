@@ -8,6 +8,8 @@ signal texture_setting_changed(setting: String, value: Variant)
 var plugin : MarchingSquaresTerrainPlugin
 var vp_tex_names : MarchingSquaresTextureNames = preload("uid://dd7fens03aosa")
 
+const MAX_TEXTURE_SLOTS := 256
+
 const VAR_NAMES : Array[Dictionary] = [
 	{
 		"tex_var": "texture_1",
@@ -84,10 +86,68 @@ const VAR_NAMES : Array[Dictionary] = [
 
 
 func _ready() -> void:
-	set_custom_minimum_size(Vector2(195, 0))
+	# Slightly wider by default so controls on the right edge are easier to click.
+	set_custom_minimum_size(Vector2(260, 0))
 	add_theme_constant_override("separation", 5)
 	add_theme_stylebox_override("focus", StyleBoxEmpty.new())
 	horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_SHOW_NEVER
+
+
+func _ensure_terrain_arrays(terrain: Object) -> bool:
+	if terrain == null:
+		return false
+	
+	# Avoid calling into the terrain script from the editor UI.
+	# In editor reload/order edge-cases the selected node can be a plain Node3D or a placeholder script,
+	# which makes method calls like _ensure_texture_slots() fail even though exported properties exist.
+	var slots_var := terrain.get("texture_slots")
+	if not (slots_var is Array):
+		push_error("[MST] Selected node doesn't expose texture_slots. Select the MarchingSquaresTerrain node (with script attached).")
+		return false
+	if slots_var.size() != MAX_TEXTURE_SLOTS:
+		slots_var.resize(MAX_TEXTURE_SLOTS)
+	for i in range(MAX_TEXTURE_SLOTS):
+		if slots_var[i] == null:
+			slots_var[i] = MarchingSquaresTextureSlot.new()
+		# Default any missing 'active' to true (older saves won't have it).
+		if slots_var[i] != null and slots_var[i].get("active") == null:
+			slots_var[i].active = true
+	
+	# Palette-per-slot arrays (all optional, but expected for the UI).
+	var slot_color_indices := terrain.get("slot_color_indices")
+	if slot_color_indices is Array:
+		if slot_color_indices.size() != MAX_TEXTURE_SLOTS:
+			slot_color_indices.resize(MAX_TEXTURE_SLOTS)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_color_indices[i] == null:
+				slot_color_indices[i] = []
+	
+	var slot_blend_modes := terrain.get("slot_blend_modes")
+	if slot_blend_modes is Array:
+		if slot_blend_modes.size() != MAX_TEXTURE_SLOTS:
+			slot_blend_modes.resize(MAX_TEXTURE_SLOTS)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_blend_modes[i] == null:
+				slot_blend_modes[i] = 3
+	
+	var slot_has_outline := terrain.get("slot_has_outline")
+	if slot_has_outline is Array:
+		if slot_has_outline.size() != MAX_TEXTURE_SLOTS:
+			slot_has_outline.resize(MAX_TEXTURE_SLOTS)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_has_outline[i] == null:
+				slot_has_outline[i] = false
+	
+	var slot_outline_modes := terrain.get("slot_outline_modes")
+	if slot_outline_modes is Array:
+		if slot_outline_modes.size() != MAX_TEXTURE_SLOTS:
+			slot_outline_modes.resize(MAX_TEXTURE_SLOTS)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_outline_modes[i] == null:
+				slot_outline_modes[i] = 0
+			slot_outline_modes[i] = clampi(int(slot_outline_modes[i]), 0, 1)
+	
+	return true
 
 
 func add_texture_settings() -> void:
@@ -98,13 +158,13 @@ func add_texture_settings() -> void:
 	if terrain == null:
 		return
 	
-	# Ensure slot arrays are initialized before we build UI.
-	terrain._ensure_texture_slots()
-	terrain._ensure_palette_settings()
+	# Ensure slot/palette arrays are initialized before we build UI.
+	if not _ensure_terrain_arrays(terrain):
+		return
 	
 	var vbox := VBoxContainer.new()
 	# Wider panel so palette weight sliders fit without being clipped.
-	vbox.set_custom_minimum_size(Vector2(260, 0))
+	vbox.set_custom_minimum_size(Vector2(300, 0))
 	
 	var preset := terrain.current_texture_preset
 	var names : Array[String] = []
@@ -119,19 +179,40 @@ func add_texture_settings() -> void:
 	
 	for i in range(visible_count):
 		var slot_idx := i
+		var slot_obj := terrain.texture_slots[slot_idx] if slot_idx < terrain.texture_slots.size() else null
+		# Hide inactive slots (except reserved ones).
+		if slot_idx != 0 and slot_idx != 15 and slot_obj != null and bool(slot_obj.get("active")) == false:
+			continue
 		
 		# Slot display name (saved in preset.new_tex_names when a preset is active)
+		var name_row := HBoxContainer.new()
+		# Negative separation makes the X "push into" the name field visually.
+		name_row.add_theme_constant_override("separation", -16)
+		
 		var name_edit := LineEdit.new()
+		name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		name_edit.text = names[slot_idx] if slot_idx < names.size() else ("Texture " + str(slot_idx + 1))
 		name_edit.placeholder_text = "Texture %d" % (slot_idx + 1)
-		name_edit.set_custom_minimum_size(Vector2(200, 25))
+		name_edit.set_custom_minimum_size(Vector2(220, 25))
 		name_edit.tooltip_text = "Rename this texture slot (saved in the active preset)"
 		
-		# Void is reserved and always slot 16 (index 15).
+		var remove_btn := Button.new()
+		remove_btn.text = "X"
+		remove_btn.flat = true
+		remove_btn.focus_mode = Control.FOCUS_NONE
+		remove_btn.set_custom_minimum_size(Vector2(22, 25))
+		remove_btn.tooltip_text = "Deactivate (clear) this texture slot"
+		
+		# Texture 1 and Void are reserved.
+		if slot_idx == 0:
+			remove_btn.disabled = true
+			remove_btn.tooltip_text = "Texture 1 is reserved"
 		if slot_idx == 15:
 			name_edit.text = "Void"
 			name_edit.editable = false
 			name_edit.tooltip_text = "Void (reserved)"
+			remove_btn.disabled = true
+			remove_btn.tooltip_text = "Void is reserved"
 		
 		# Only persist names into a real preset resource.
 		var persist_name := func(p_idx: int):
@@ -148,9 +229,60 @@ func add_texture_settings() -> void:
 			if preset.resource_path != null and not str(preset.resource_path).is_empty():
 				ResourceSaver.save(preset)
 		
-		name_edit.text_submitted.connect(func(_t): persist_name.call(slot_idx))
-		name_edit.focus_exited.connect(func(): persist_name.call(slot_idx))
-		vbox.add_child(name_edit, true)
+		var deactivate_slot := func(p_idx: int):
+			if terrain == null:
+				return
+			if p_idx == 15:
+				return
+			
+			if not _ensure_terrain_arrays(terrain):
+				return
+			
+			if terrain.texture_slots[p_idx] == null:
+				terrain.texture_slots[p_idx] = MarchingSquaresTextureSlot.new()
+			terrain.texture_slots[p_idx].active = false
+			terrain.texture_slots[p_idx].texture = null
+			terrain.texture_slots[p_idx].scale = 1.0
+			
+			# Reset per-slot palette/outline settings too (so the slot truly clears).
+			if p_idx >= 0 and p_idx < terrain.slot_color_indices.size():
+				terrain.slot_color_indices[p_idx] = []
+			if p_idx >= 0 and p_idx < terrain.slot_blend_modes.size():
+				terrain.slot_blend_modes[p_idx] = 3
+			if p_idx >= 0 and p_idx < terrain.slot_has_outline.size():
+				terrain.slot_has_outline[p_idx] = false
+			if p_idx >= 0 and p_idx < terrain.slot_outline_modes.size():
+				terrain.slot_outline_modes[p_idx] = 0
+			
+			# Keep legacy properties in sync for slots 1..15 so presets save correctly.
+			if p_idx >= 0 and p_idx < 15:
+				terrain.set("texture_%d" % (p_idx + 1), null)
+				terrain.set("texture_scale_%d" % (p_idx + 1), 1.0)
+				# Clear legacy grass toggle for slots 2..6 (indices 1..5)
+				if p_idx >= 1 and p_idx <= 5:
+					terrain.set("tex%d_has_grass" % (p_idx + 1), false)
+			else:
+				terrain.rebuild_texture_array()
+				terrain._push_tex_scales()
+			
+			# Push palette lookup textures to materials.
+			terrain._rebuild_palette_uniforms()
+			
+			if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+				terrain.save_to_preset()
+			
+			# Refresh UI + dropdowns.
+			if plugin and plugin.ui and plugin.ui.tool_attributes:
+				plugin.ui.tool_attributes.show_tool_attributes(plugin.ui.active_tool)
+			call_deferred("add_texture_settings")
+		
+		name_edit.text_submitted.connect(func(_t, p_idx := slot_idx): persist_name.call(p_idx))
+		name_edit.focus_exited.connect(func(p_idx := slot_idx): persist_name.call(p_idx))
+		remove_btn.pressed.connect(func(p_idx := slot_idx): deactivate_slot.call(p_idx))
+		
+		name_row.add_child(name_edit, true)
+		name_row.add_child(remove_btn, false)
+		vbox.add_child(name_row, true)
 		
 		# Terrain texture picker (slot-based)
 		var slot := terrain.texture_slots[i]
@@ -158,21 +290,35 @@ func add_texture_settings() -> void:
 		if tex_var != null and not (tex_var is Texture2D):
 			tex_var = null
 		
-		var editor_r_picker := EditorResourcePicker.new()
-		editor_r_picker.set_base_type("Texture2D")
-		editor_r_picker.edited_resource = tex_var
-		editor_r_picker.resource_changed.connect(func(resource, slot_idx := i):
-			if resource != null and not (resource is Texture2D):
-				resource = null
-			if terrain.texture_slots[slot_idx] == null:
-				terrain.texture_slots[slot_idx] = MarchingSquaresTextureSlot.new()
-			terrain.texture_slots[slot_idx].texture = resource
-			terrain.rebuild_texture_array()
-			if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
-				terrain.save_to_preset()
-		)
-		editor_r_picker.set_custom_minimum_size(Vector2(100, 25))
-		vbox.add_child(editor_r_picker, true)
+		# For the reserved Void slot, don't allow editing the texture.
+		if slot_idx == 15:
+			var void_tex_label := Label.new()
+			void_tex_label.text = "(Void texture is reserved)"
+			vbox.add_child(void_tex_label, true)
+		else:
+			var editor_r_picker := EditorResourcePicker.new()
+			editor_r_picker.set_base_type("Texture2D")
+			editor_r_picker.edited_resource = tex_var
+			editor_r_picker.resource_changed.connect(func(resource, p_idx := slot_idx):
+				if resource != null and not (resource is Texture2D):
+					resource = null
+				if not _ensure_terrain_arrays(terrain):
+					return
+				if terrain.texture_slots[p_idx] == null:
+					terrain.texture_slots[p_idx] = MarchingSquaresTextureSlot.new()
+				terrain.texture_slots[p_idx].texture = resource
+				
+				# Keep legacy properties in sync for slots 1..15 so presets save correctly.
+				if p_idx >= 0 and p_idx < 15:
+					terrain.set("texture_%d" % (p_idx + 1), resource)
+				else:
+					terrain.rebuild_texture_array()
+				
+				if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+					terrain.save_to_preset()
+			)
+			editor_r_picker.set_custom_minimum_size(Vector2(100, 25))
+			vbox.add_child(editor_r_picker, true)
 		
 		# Grass settings (still legacy, only used for first 6 slots currently)
 		if i <= 5:
@@ -222,11 +368,19 @@ func add_texture_settings() -> void:
 		scale_slider.drag_ended.connect(func(val): _on_slider_drag_ended(val))
 		c_cont_2.add_child(scale_slider, true)
 		scale_slider.set_value_no_signal(scale_value)
-		scale_slider.value_changed.connect(func(val, slot_idx := i):
-			if terrain.texture_slots[slot_idx] == null:
-				terrain.texture_slots[slot_idx] = MarchingSquaresTextureSlot.new()
-			terrain.texture_slots[slot_idx].scale = float(val)
-			terrain._push_tex_scales()
+		scale_slider.value_changed.connect(func(val, p_idx := slot_idx):
+			if not _ensure_terrain_arrays(terrain):
+				return
+			if terrain.texture_slots[p_idx] == null:
+				terrain.texture_slots[p_idx] = MarchingSquaresTextureSlot.new()
+			terrain.texture_slots[p_idx].scale = float(val)
+			
+			# Keep legacy properties in sync for slots 1..15 so presets save correctly.
+			if p_idx >= 0 and p_idx < 15:
+				terrain.set("texture_scale_%d" % (p_idx + 1), float(val))
+			else:
+				terrain._push_tex_scales()
+			
 			if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
 				terrain.save_to_preset()
 		)
@@ -249,7 +403,24 @@ func add_texture_settings() -> void:
 	var add_button := Button.new()
 	add_button.text = "+ Add Texture"
 	add_button.pressed.connect(func():
-		terrain.visible_texture_slot_count = mini(int(terrain.visible_texture_slot_count) + 1, 256)
+		if not _ensure_terrain_arrays(terrain):
+			return
+		
+		# Prefer re-enabling the first inactive slot that is already in-range.
+		var made_active := false
+		for idx in range(clampi(int(terrain.visible_texture_slot_count), 1, 256)):
+			if idx == 0 or idx == 15:
+				continue
+			var s := terrain.texture_slots[idx]
+			if s != null and bool(s.get("active")) == false:
+				s.active = true
+				made_active = true
+				break
+		
+		# Otherwise, extend the visible range by one.
+		if not made_active:
+			terrain.visible_texture_slot_count = mini(int(terrain.visible_texture_slot_count) + 1, 256)
+		
 		if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
 			terrain.save_to_preset()
 		call_deferred("add_texture_settings")

@@ -70,10 +70,10 @@ group_uniforms;
 
 uniform float global_noise_scale = 0.08;
 uniform float global_noise_strength = 0.3;
-uniform bool global_noise_scroll = false;
-uniform int global_noise_octaves : hint_range(1, 6) = 5;
+// 0..1 multiplier for scroll speed (0 = off)
+uniform float global_noise_scroll = 0.0;
+uniform sampler2D global_noise_texture : hint_default_white, repeat_enable, filter_linear;
 
-varying float v_brightness;
 varying vec3 v_grass_color;
 varying vec3 model_origin;
 varying vec3 instance_color;
@@ -123,11 +123,70 @@ float fbm_octaves(vec2 p, int octaves) {
 	float frequency = 1.0;
 	for (int i = 0; i < 6; i++) {
 		if (i >= octaves) break;
-		value += amplitude * noise(p * frequency);
+		value += amplitude * cheap_noise(p * frequency);
 		frequency *= 2.0;
 		amplitude *= 0.5;
 	}
 	return value;
+}
+
+// Cloud field based on layered value-noise fBm (ported from arlez80/cloud-shader, MIT).
+const float CLOUD_NOISE_SCALE = 0.00005;
+const float CLOUD_SEED = -1000.0;
+const vec2 CLOUD_SPEED = vec2(2.0, 0.0);
+const vec2 CLOUD_TRANSFORM_SPEED = vec2(0.0, 0.0001);
+
+highp float cloud_random(vec2 pos) {
+	// Continuous hash (avoid mod() discontinuities that can create line artifacts).
+	return fract(sin(dot(pos, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+float cloud_value_noise(vec2 pos) {
+	vec2 p = floor(pos);
+	vec2 f = fract(pos);
+
+	float v00 = cloud_random(p + vec2(0.0, 0.0));
+	float v10 = cloud_random(p + vec2(1.0, 0.0));
+	float v01 = cloud_random(p + vec2(0.0, 1.0));
+	float v11 = cloud_random(p + vec2(1.0, 1.0));
+
+	vec2 u = smoothstep(0.0, 1.0, f);
+	return mix(mix(v00, v10, u.x), mix(v01, v11, u.x), u.y);
+}
+
+float _cloud_h(vec2 pos_a, vec2 pos_b) {
+	float h = (
+		cloud_value_noise(pos_a) * 8.0 +
+		cloud_value_noise(pos_a * 4.2) * 8.0 +
+		cloud_value_noise(pos_a * 8.4) * 8.0 +
+		cloud_value_noise(pos_a * 17.6) * 8.0 +
+		cloud_value_noise(pos_a * 61.8) * 4.0 +
+		cloud_value_noise(pos_b * 90.1) * 4.0 +
+		cloud_value_noise(pos_b * 110.1) * 0.0 +
+		cloud_value_noise(pos_b * 220.0) * 0.0
+	) / 46.0;
+	return clamp(h, 0.0, 1.0);
+}
+
+float cloud_shadow_field(vec2 world_xz) {
+	float scale = global_noise_scale * 1250.0;
+	vec2 p = world_xz * scale;
+	vec2 pos_a = (vec2(p.x, p.y + CLOUD_SEED) + (TIME * CLOUD_SPEED)) * CLOUD_NOISE_SCALE;
+	vec2 pos_b = pos_a + CLOUD_TRANSFORM_SPEED * TIME;
+
+	// Blur/low-pass to reduce grid-aligned "digital camo" edges.
+	vec2 o = vec2(0.37, 0.17);
+	vec2 op = vec2(o.y, -o.x);
+	float h = (
+		_cloud_h(pos_a, pos_b) * 0.40 +
+		_cloud_h(pos_a + o, pos_b + o) * 0.15 +
+		_cloud_h(pos_a - o, pos_b - o) * 0.15 +
+		_cloud_h(pos_a + op, pos_b + op) * 0.15 +
+		_cloud_h(pos_a - op, pos_b - op) * 0.15
+	);
+
+	float bias = 0.4;
+	return h - bias;
 }
 
 float directional_pulse(vec2 world_xz, vec2 dir, float t) {
@@ -399,20 +458,6 @@ void vertex() {
 		_gc = use_base_color_1 ? get_grass_palette_color(0, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(0, world_origin.xz, world_origin.y);
 	v_grass_color = _gc;
 	
-	v_brightness = 1.0;
-	if (global_noise_strength > 0.0) {
-			vec2 scroll = vec2(0.0);
-			if (global_noise_scroll) {
-				vec2 dir = normalize(wind_direction);
-				scroll = dir * TIME * wind_speed * 3.0;
-			}
-			float gn = fbm_octaves(vec2(
-				(world_origin.x + scroll.x) * global_noise_scale + (world_origin.z + scroll.y) * 0.031,
-				(world_origin.z + scroll.y) * global_noise_scale - (world_origin.x + scroll.x) * 0.023
-			), global_noise_octaves);
-			gn = smoothstep(0.0, 1.0, gn);
-			v_brightness = mix(1.0 - global_noise_strength, 1.0 + (global_noise_strength * 0.5), gn);
-	}
 
 	vec3 world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	vertex_normal = world_normal;
@@ -462,7 +507,20 @@ void fragment() {
 
 	if (ALPHA < 0.1) discard;
 
-	ALBEDO *= v_brightness;
+	if (global_noise_strength > 0.0) {
+		vec2 scroll = vec2(0.0);
+		if (global_noise_scroll > 0.0) {
+			vec2 dir = normalize(wind_direction);
+			scroll = dir * TIME * wind_speed * 3.0 * global_noise_scroll;
+		}
+
+		vec2 uv = (vec2(world_origin.x, world_origin.z) + scroll) * global_noise_scale;
+		uv = fract(uv);
+
+		float gn = texture(global_noise_texture, uv).r;
+		float mult = mix(1.0 - global_noise_strength, 1.0, clamp(gn, 0.0, 1.0));
+		ALBEDO *= mult;
+	}
 
 	LIGHT_VERTEX = model_origin;
 }

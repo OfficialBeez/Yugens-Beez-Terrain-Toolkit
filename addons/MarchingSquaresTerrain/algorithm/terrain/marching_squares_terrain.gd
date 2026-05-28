@@ -75,6 +75,14 @@ enum StorageMode {
 ## Tracks the mode used during the last successful save for reporting purposes.
 @export_storage var _last_storage_mode : StorageMode = StorageMode.BAKED
 
+## One-time mesh migration flag: walls are now tagged via UV sentinel so shaders reliably detect walls.
+## Existing chunks need a one-time regen to pick up the new UV values.
+@export_storage var _uv_wall_sentinel_migrated : bool = false
+
+## One-time mesh migration flag: wall vertices now compute their dominant materials from wall maps.
+## Existing chunks need a one-time regen to pick up corrected wall material indices.
+@export_storage var _wall_material_pair_migrated : bool = false
+
 #region global terrain settings
 # Terrain Settings
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var dimensions : Vector3i = Vector3i(33, 32, 33): # Total amount of height values in X and Z direction, and total height range
@@ -117,18 +125,43 @@ enum StorageMode {
 		terrain_material.set_shader_parameter("use_cell_shading", value)
 		var grass_mat := grass_mesh.material as ShaderMaterial
 		grass_mat.set_shader_parameter("use_cell_shading", value)
+
+enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1, CHUNK_OUTLINE = 2 }
+
+var _outline_syncing: bool = false
+
+# Outline mode selector (replaces the old edge_highlights checkbox)
+@export_custom(PROPERTY_HINT_ENUM, "Off,Black Silhouette,Chunk Outline", PROPERTY_USAGE_STORAGE) var outline_mode: int = OutlineMode.OFF:
+	set(value):
+		outline_mode = clampi(int(value), 0, 2)
+		if not _outline_syncing:
+			_outline_syncing = true
+			edge_highlights = (outline_mode != OutlineMode.OFF)
+			_outline_syncing = false
+		_apply_outline_next_pass()
+
+# Legacy storage flag (kept for backwards compatibility with older scenes).
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE | PROPERTY_USAGE_NO_EDITOR) var edge_highlights : bool = false:
+	set(value):
+		edge_highlights = bool(value)
+		if not _outline_syncing:
+			_outline_syncing = true
+			outline_mode = OutlineMode.BLACK_SILHOUETTE if edge_highlights else OutlineMode.OFF
+			_outline_syncing = false
+		_apply_outline_next_pass()
+
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var collision_depth: float = 0.0:
 	set(value):
 		collision_depth = value
 		if not is_batch_updating:
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.regenerate_mesh()
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var wall_threshold : float = 0.0: # Determines what part of the terrain's mesh are walls
+@export_custom(PROPERTY_HINT_RANGE, "0.005,0.5,0.005", PROPERTY_USAGE_STORAGE) var wall_threshold : float = 0.25: # Determines what part of the terrain's mesh are walls
 	set(value):
-		wall_threshold = value
-		terrain_material.set_shader_parameter("wall_threshold", value)
+		wall_threshold = clampf(float(value), 0.005, 0.5)
+		terrain_material.set_shader_parameter("wall_threshold", wall_threshold)
 		var grass_mat := grass_mesh.material as ShaderMaterial
-		grass_mat.set_shader_parameter("wall_threshold", value)
+		grass_mat.set_shader_parameter("wall_threshold", wall_threshold)
 		for chunk: MarchingSquaresTerrainChunk in chunks.values():
 			if chunk.grass_planter:
 				chunk.grass_planter.regenerate_all_cells()
@@ -163,19 +196,19 @@ enum StorageMode {
 		var grass_mat := grass_mesh.material as ShaderMaterial
 		grass_mat.set_shader_parameter("global_noise_strength", value)
 
-@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var global_noise_scroll: bool = false:
+@export_custom(PROPERTY_HINT_RANGE, "0.0,1.0,0.01", PROPERTY_USAGE_STORAGE) var global_noise_scroll: float = 0.0:
 	set(value):
-		global_noise_scroll = value
-		terrain_material.set_shader_parameter("global_noise_scroll", value)
+		global_noise_scroll = clampf(float(value), 0.0, 1.0)
+		terrain_material.set_shader_parameter("global_noise_scroll", global_noise_scroll)
 		var grass_mat := grass_mesh.material as ShaderMaterial
-		grass_mat.set_shader_parameter("global_noise_scroll", value)
+		grass_mat.set_shader_parameter("global_noise_scroll", global_noise_scroll)
 
-@export_custom(PROPERTY_HINT_RANGE, "1,6,1", PROPERTY_USAGE_STORAGE) var global_noise_octaves: int = 5:
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var global_noise_texture : Texture2D:
 	set(value):
-		global_noise_octaves = clamp(value, 1, 6)
-		terrain_material.set_shader_parameter("global_noise_octaves", global_noise_octaves)
+		global_noise_texture = value
+		terrain_material.set_shader_parameter("global_noise_texture", value)
 		var grass_mat := grass_mesh.material as ShaderMaterial
-		grass_mat.set_shader_parameter("global_noise_octaves", global_noise_octaves)
+		grass_mat.set_shader_parameter("global_noise_texture", value)
 
 # Grass settings
 @export var rebuild_grass_now: bool = false:
@@ -594,10 +627,28 @@ const VOID_TEXTURE_SLOT := 15
 		outline_width = clampf(value, 0.25, 32.0)
 		if not is_batch_updating and terrain_material:
 			terrain_material.set_shader_parameter("outline_width", outline_width)
+			_apply_outline_next_pass()
 
 # Default wall texture slot (0-15) used when no quick paint is active
 # Default is 5 (Texture 6 in 1-indexed UI terms)
-@export_storage var default_wall_texture : int = 5
+@export_storage var default_wall_texture : int = 5:
+	set(value):
+		var old := default_wall_texture
+		default_wall_texture = clampi(int(value), 0, 255)
+		if is_batch_updating:
+			return
+		_apply_default_wall_texture_change(old, default_wall_texture)
+
+
+func _apply_default_wall_texture_change(old_idx: int, new_idx: int) -> void:
+	if chunks.is_empty():
+		return
+	for chunk: MarchingSquaresTerrainChunk in chunks.values():
+		var changed: bool = bool(chunk.apply_default_wall_texture(old_idx, new_idx))
+		# Also update "unpainted" wall cells (those matching ground) to follow the new default.
+		changed = bool(chunk.apply_default_wall_to_unpainted(new_idx)) or changed
+		if changed:
+			chunk.regenerate_all_cells(true)
 
 signal load_finished
 
@@ -605,6 +656,7 @@ var void_texture := preload("uid://csvthlqhb8g5j")
 var placeholder_wind_texture := preload("uid://dk1t5hy2tiil7") # Change to your own texture
 
 var terrain_material : ShaderMaterial = null
+var outline_next_pass_material : ShaderMaterial = null
 var grass_mesh : QuadMesh = null 
 
 var is_batch_updating : bool = false
@@ -622,10 +674,13 @@ func _init() -> void:
 	# Create unique copies of shared resources for this node instance
 	# This prevents texture/material changes from affecting other MarchingSquaresTerrain nodes
 	terrain_material = preload("res://addons/MarchingSquaresTerrain/resources/plugin_materials/mst_terrain_shader.tres").duplicate(true)
+	outline_next_pass_material = preload("res://addons/MarchingSquaresTerrain/resources/plugin_materials/mst_outline_nextpass.tres").duplicate(true)
 	var base_grass_mesh := preload("res://addons/MarchingSquaresTerrain/resources/plugin_materials/mst_grass_mesh.tres")
 	grass_mesh = base_grass_mesh.duplicate(true)
 	grass_mesh.material = base_grass_mesh.material.duplicate(true)
 	print_verbose("Last storage mode: ", _last_storage_mode)
+
+	_apply_outline_next_pass()
 
 	_ensure_texture_slots()
 	_maybe_migrate_legacy_textures()
@@ -635,12 +690,70 @@ func _init() -> void:
 	_rebuild_palette_uniforms()
 
 
+func get_chunk_surface_material() -> Material:
+	# Black silhouette outline must render BEFORE the terrain, otherwise it gets depth-tested away.
+	if outline_mode == OutlineMode.BLACK_SILHOUETTE and outline_next_pass_material and terrain_material:
+		outline_next_pass_material.set_shader_parameter("outline_thickness", clampf(outline_width * 0.01, 0.001, 0.2))
+		outline_next_pass_material.next_pass = terrain_material
+		return outline_next_pass_material
+
+	if outline_next_pass_material:
+		outline_next_pass_material.next_pass = null
+	return terrain_material
+
+
+func _apply_outline_next_pass() -> void:
+	if not terrain_material:
+		return
+
+	# Disable screen-space edge highlights (they read as jittery/snowy).
+	terrain_material.set_shader_parameter("use_edge_highlights", false)
+
+	var use_black_silhouette := (outline_mode == OutlineMode.BLACK_SILHOUETTE)
+
+	# Floor/wall seam outline is now generated as a post overlay mesh per-chunk.
+	# This allows the outline to sample the already-lit terrain color (so it darkens in shadow).
+	terrain_material.set_shader_parameter("use_seam_outline", false)
+	terrain_material.set_shader_parameter("seam_outline_from_albedo", false)
+	terrain_material.set_shader_parameter("seam_outline_lift", 0.0)
+	terrain_material.set_shader_parameter("seam_outline_color", Color(1, 1, 1, 1))
+	terrain_material.set_shader_parameter("seam_outline_width", maxf(outline_width * 0.35, 0.5))
+	terrain_material.set_shader_parameter("seam_outline_strength", 0.0)
+
+	# We no longer use terrain_material.next_pass for silhouette outlines because the order is wrong.
+	terrain_material.next_pass = null
+	if outline_next_pass_material:
+		outline_next_pass_material.next_pass = null
+
+	# Configure pass chain + choose the active material used by chunk surfaces.
+	var active_mat: Material = terrain_material
+	if use_black_silhouette and outline_next_pass_material:
+		# Map the existing Outline Width slider to a world-space thickness.
+		outline_next_pass_material.set_shader_parameter("outline_thickness", clampf(outline_width * 0.01, 0.001, 0.2))
+		outline_next_pass_material.next_pass = terrain_material
+		active_mat = outline_next_pass_material
+
+	# Ensure all chunk meshes are using the correct base material.
+	for chunk: MarchingSquaresTerrainChunk in chunks.values():
+		if chunk and chunk.mesh and chunk.mesh.get_surface_count() > 0:
+			chunk.mesh.surface_set_material(0, active_mat)
+
+	# Update per-chunk wall boundary outline mesh (white), derived from wall mesh boundary edges.
+	# Chunks will clear their overlay when chunk-outline mode is not selected.
+	for chunk: MarchingSquaresTerrainChunk in chunks.values():
+		if chunk and chunk.has_method("regenerate_wall_boundary_outline"):
+			chunk.regenerate_wall_boundary_outline()
+
+
 func _ensure_texture_slots() -> void:
 	if texture_slots.size() != MAX_TEXTURE_SLOTS:
 		texture_slots.resize(MAX_TEXTURE_SLOTS)
 	for i in range(MAX_TEXTURE_SLOTS):
 		if texture_slots[i] == null:
 			texture_slots[i] = MarchingSquaresTextureSlot.new()
+		# Default any missing 'active' to true (older saves won't have it).
+		if texture_slots[i] != null and texture_slots[i].get("active") == null:
+			texture_slots[i].active = true
 
 	# Ensure legacy VOID slot always has a valid texture.
 	if texture_slots.size() > VOID_TEXTURE_SLOT and texture_slots[VOID_TEXTURE_SLOT] and texture_slots[VOID_TEXTURE_SLOT].texture == null:
@@ -851,9 +964,26 @@ func _deferred_enter_tree() -> void:
 	migrate_colors_to_palette()
 	force_batch_update()
 	
+	# Legacy safety: wall_threshold=0 makes many walls classify as floor (due to smoothed normals).
+	# If the saved value is effectively "unset", migrate it to a sane default.
+	if wall_threshold < 0.005:
+		wall_threshold = 0.25
+	
+	# One-time editor migrations: regenerate meshes so new wall tagging/material selection is present in geometry.
+	var force_regen_for_wall_fixes : bool = false
+	if EngineWrapper.instance.is_editor():
+		if not _uv_wall_sentinel_migrated:
+			_uv_wall_sentinel_migrated = true
+			force_regen_for_wall_fixes = true
+		if not _wall_material_pair_migrated:
+			_wall_material_pair_migrated = true
+			force_regen_for_wall_fixes = true
+	
 	# Initialize all chunks (regenerate mesh/grass from loaded data)
 	for chunk : MarchingSquaresTerrainChunk in chunks.values():
 		chunk.initialize_terrain(true)
+		if force_regen_for_wall_fixes:
+			chunk.regenerate_mesh(true)
 	
 	load_finished.emit()
 
@@ -1043,7 +1173,9 @@ func _rebuild_palette_uniforms() -> void:
 	var img_weights := Image.create_empty(8, MAX_TEXTURE_SLOTS, false, Image.FORMAT_RGBAF)
 	var img_meta := Image.create_empty(1, MAX_TEXTURE_SLOTS, false, Image.FORMAT_RGBA8)
 
-	var fallback := Color(0.392, 0.471, 0.318, 1.0)
+	# Palette colors are edited/stored as sRGB-style values (e.g. 100/255 = 0.392...).
+	# Shaders operate in linear space, so convert to linear before uploading.
+	var fallback := Color(0.392, 0.471, 0.318, 1.0).srgb_to_linear()
 
 	for slot in range(MAX_TEXTURE_SLOTS):
 		var indices: Array = slot_color_indices[slot]
@@ -1060,7 +1192,7 @@ func _rebuild_palette_uniforms() -> void:
 			var c := Color(1.0, 1.0, 1.0, 1.0)
 			var w := 0.0
 			if i < count and indices[i] < palette_colors.size():
-				c = palette_colors[indices[i]]
+				c = palette_colors[indices[i]].srgb_to_linear()
 				w = (float(palette_weights[indices[i]]) / 100.0) if indices[i] < palette_weights.size() else 1.0
 			elif i == 0 and count == 0:
 				# Ensure every slot has at least 1 entry for the shader.
@@ -1145,14 +1277,16 @@ func force_batch_update() -> void:
 	grass_mat.set_shader_parameter("wind_tip_strength", wind_tip_strength)
 	
 	# GLOBAL NOISE - Dark-light Hues
+	terrain_material.set_shader_parameter("global_noise_texture", global_noise_texture)
 	terrain_material.set_shader_parameter("global_noise_scale", global_noise_scale)
 	terrain_material.set_shader_parameter("global_noise_strength", global_noise_strength)
 	terrain_material.set_shader_parameter("global_noise_scroll", global_noise_scroll)
-	terrain_material.set_shader_parameter("global_noise_octaves", global_noise_octaves)
+	# Edge Highlights is handled via a next_pass outline material.
+	_apply_outline_next_pass()
+	grass_mat.set_shader_parameter("global_noise_texture", global_noise_texture)
 	grass_mat.set_shader_parameter("global_noise_scale", global_noise_scale)
 	grass_mat.set_shader_parameter("global_noise_strength", global_noise_strength)
 	grass_mat.set_shader_parameter("global_noise_scroll", global_noise_scroll)
-	grass_mat.set_shader_parameter("global_noise_octaves", global_noise_octaves)
 	# Keep terrain scroll direction/speed in sync with the grass material.
 	var wd = grass_mat.get_shader_parameter("wind_direction")
 	if wd != null:
@@ -1164,6 +1298,7 @@ func force_batch_update() -> void:
 	grass_mat.set_shader_parameter("color_variation_strength", color_variation_strength)
 
 	terrain_material.set_shader_parameter("outline_width", outline_width)
+	_apply_outline_next_pass()
 
 
 ## Syncs and saves current UI texture values to the given preset resource

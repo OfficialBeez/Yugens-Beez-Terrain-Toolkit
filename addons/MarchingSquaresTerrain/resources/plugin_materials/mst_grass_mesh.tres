@@ -43,8 +43,7 @@ shader_parameter/bands = 5
 shader_parameter/shadow_intensity = 0.0
 shader_parameter/global_noise_scale = 0.08
 shader_parameter/global_noise_strength = 0.3
-shader_parameter/global_noise_scroll = false
-shader_parameter/global_noise_octaves = 5
+shader_parameter/global_noise_scroll = 0.0
 
 [resource]
 material = SubResource("ShaderMaterial_fa4te")

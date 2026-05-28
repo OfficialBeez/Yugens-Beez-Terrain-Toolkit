@@ -736,9 +736,27 @@ func draw_pattern(terrain: MarchingSquaresTerrain):
 					restore_value = chunk.get_color_0(draw_cell_coords)
 					restore_value_cc = chunk.get_color_1(draw_cell_coords)
 				
-				var t := clamp(sample * strength, 0.0, 1.0)
-				draw_value = restore_value.lerp(vertex_color_0, t)
-				draw_value_cc = restore_value_cc.lerp(vertex_color_1, t)
+				# IMPORTANT: Never lerp "material ID" encodings.
+				# Lerp creates fractional IDs which decode to random texture indices (including Void), causing holes/speckling.
+				# Instead: use falloff/strength as a probability to *flip* the cell to the target material.
+				var paint_strength := clampf(strength / 0.3, 0.0, 1.0) # normalize current UI range (0.025..0.3) to 0..1
+				# Boost so a single stroke actually changes cells at typical defaults.
+				var t := clamp(sample * paint_strength * 4.0, 0.0, 1.0)
+				if t <= 0.0:
+					draw_value = restore_value
+					draw_value_cc = restore_value_cc
+				elif t >= 1.0:
+					draw_value = vertex_color_0
+					draw_value_cc = vertex_color_1
+				else:
+					var global_x := draw_chunk_coords.x * terrain.dimensions.x + draw_cell_coords.x
+					var global_z := draw_chunk_coords.y * terrain.dimensions.z + draw_cell_coords.y
+					if _hash01(global_x, global_z) < t:
+						draw_value = vertex_color_0
+						draw_value_cc = vertex_color_1
+					else:
+						draw_value = restore_value
+						draw_value_cc = restore_value_cc
 			elif mode == TerrainToolMode.DEBUG_BRUSH:
 				var g_pos := chunk.to_global(Vector3(float(draw_cell_coords.x), chunk.get_height(draw_cell_coords), float(draw_cell_coords.y)))
 				var normal := get_cell_normal(chunk, draw_cell_coords)
@@ -1203,55 +1221,18 @@ func apply_composite_pattern_action(terrain: MarchingSquaresTerrain, patterns: D
 #region vertex/texture setters and getters
 
 func _set_vertex_colors(vc_idx: int) -> void:
-	match vc_idx:
-		0: #rr
-			vertex_color_0 = Color(1.0, 0.0, 0.0, 0.0)
-			vertex_color_1 = Color(1.0, 0.0, 0.0, 0.0)
-		1: #rg
-			vertex_color_0 = Color(1.0, 0.0, 0.0, 0.0)
-			vertex_color_1 = Color(0.0, 1.0, 0.0, 0.0)
-		2: #rb
-			vertex_color_0 = Color(1.0, 0.0, 0.0, 0.0)
-			vertex_color_1 = Color(0.0, 0.0, 1.0, 0.0)
-		3: #ra
-			vertex_color_0 = Color(1.0, 0.0, 0.0, 0.0)
-			vertex_color_1 = Color(0.0, 0.0, 0.0, 1.0)
-		4: #gr
-			vertex_color_0 = Color(0.0, 1.0, 0.0, 0.0)
-			vertex_color_1 = Color(1.0, 0.0, 0.0, 0.0)
-		5: #gg
-			vertex_color_0 = Color(0.0, 1.0, 0.0, 0.0)
-			vertex_color_1 = Color(0.0, 1.0, 0.0, 0.0)
-		6: #gb
-			vertex_color_0 = Color(0.0, 1.0, 0.0, 0.0)
-			vertex_color_1 = Color(0.0, 0.0, 1.0, 0.0)
-		7: #ga
-			vertex_color_0 = Color(0.0, 1.0, 0.0, 0.0)
-			vertex_color_1 = Color(0.0, 0.0, 0.0, 1.0)
-		8: #br
-			vertex_color_0 = Color(0.0, 0.0, 1.0, 0.0)
-			vertex_color_1 = Color(1.0, 0.0, 0.0, 0.0)
-		9: #bg
-			vertex_color_0 = Color(0.0, 0.0, 1.0, 0.0)
-			vertex_color_1 = Color(0.0, 1.0, 0.0, 0.0)
-		10: #bb
-			vertex_color_0 = Color(0.0, 0.0, 1.0, 0.0)
-			vertex_color_1 = Color(0.0, 0.0, 1.0, 0.0)
-		11: #ba
-			vertex_color_0 = Color(0.0, 0.0, 1.0, 0.0)
-			vertex_color_1 = Color(0.0, 0.0, 0.0, 1.0)
-		12: #ar
-			vertex_color_0 = Color(0.0, 0.0, 0.0, 1.0)
-			vertex_color_1 = Color(1.0, 0.0, 0.0, 0.0)
-		13: #ag
-			vertex_color_0 = Color(0.0, 0.0, 0.0, 1.0)
-			vertex_color_1 = Color(0.0, 1.0, 0.0, 0.0)
-		14: #ab
-			vertex_color_0 = Color(0.0, 0.0, 0.0, 1.0)
-			vertex_color_1 = Color(0.0, 0.0, 1.0, 0.0)
-		15: #aa
-			vertex_color_0 = Color(0.0, 0.0, 0.0, 1.0)
-			vertex_color_1 = Color(0.0, 0.0, 0.0, 1.0)
+	# New 256-slot encoding (byte in color_0.r). Keep color_1 unused.
+	vc_idx = clampi(vc_idx, 0, 255)
+	vertex_color_0 = Color(float(vc_idx) / 255.0, 0.0, 0.0, 0.0)
+	vertex_color_1 = Color(0.0, 0.0, 0.0, 0.0)
+
+
+static func _hash01(x: int, z: int) -> float:
+	# Deterministic hash in [0,1] for stable "soft" brush edges without invalid ID lerps.
+	var n := int(x) * 374761393 + int(z) * 668265263
+	n = (n ^ (n >> 13)) * 1274126177
+	n = n ^ (n >> 16)
+	return float(n & 0x7fffffff) / 2147483647.0
 
 
 func _set_new_textures(_preset: MarchingSquaresTexturePreset) -> void:

@@ -41,10 +41,11 @@ var terrain_settings_data : Dictionary = {
 		"use_flat_normals": "CheckBox",
 		"use_cell_shading": "CheckBox",
 		"outline_width": "EditorSpinSlider",
+		"outline_mode": "OptionButton",
 	},
 	"Grass Settings": {
-		"global_noise_scroll": "CheckBox",
-		"global_noise_octaves": "SpinBox",
+		"global_noise_texture": "EditorResourcePicker",
+		"global_noise_scroll": "EditorSpinSlider",
 		"global_noise_scale": "EditorSpinSlider",
 		"global_noise_strength": "EditorSpinSlider",
 		"grass_subdivisions": "SpinBox",
@@ -508,10 +509,6 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			return _make_vector_editor(editor_setting, s_value, setting)
 		"SpinBox":
 			var spin_box := SpinBox.new()
-			if setting == "global_noise_octaves":
-				spin_box.min_value = 1
-				spin_box.max_value = 6
-				spin_box.step = 1
 			spin_box.value = s_value
 			spin_box.value_changed.connect(func(value): _on_terrain_setting_changed(setting, value))
 			spin_box.set_custom_minimum_size(Vector2(80, 25))
@@ -529,6 +526,10 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			elif setting == "outline_width":
 				spin_slider.set_min(0.25)
 				spin_slider.set_max(32.0)
+			elif setting == "global_noise_scroll":
+				spin_slider.set_min(0.0)
+				spin_slider.set_max(1.0)
+				spin_slider.set_step(0.01)
 			else:
 				spin_slider.set_min(0.005)
 				spin_slider.set_max(1.0)
@@ -544,8 +545,19 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			picker.set_base_type("Noise" if setting == "noise_hmap" else "Texture2D")
 			picker.edited_resource = s_value
 			_hide_textures(picker)
-			picker.resource_changed.connect(func(resource): _on_terrain_setting_changed(setting, resource))
-			picker.set_custom_minimum_size(Vector2(120, 25))
+			picker.resource_changed.connect(func(resource):
+				_on_terrain_setting_changed(setting, resource)
+				# Let users actually edit the resource (NoiseTexture2D etc.) in the Inspector.
+				if setting == "global_noise_texture" and resource != null:
+					EditorInterface.edit_resource(resource)
+			)
+			# Some Godot builds emit resource_selected when clicking the picker/Edit button.
+			if picker.has_signal("resource_selected"):
+				picker.connect("resource_selected", func(resource, inspect := true):
+					if setting == "global_noise_texture" and inspect and resource != null:
+						EditorInterface.edit_resource(resource)
+				)
+			picker.set_custom_minimum_size(Vector2(140, 25))
 			return picker
 		"ColorPickerButton":
 			var c_pick := ColorPickerButton.new()
@@ -556,13 +568,18 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 		"CheckBox":
 			var checkbox := CheckBox.new()
 			checkbox.set_flat(true)
-			checkbox.button_pressed = s_value
+			checkbox.button_pressed = bool(s_value) if s_value != null else false
 			checkbox.toggled.connect(func(pressed): _on_terrain_setting_changed(setting, pressed))
 			return checkbox
 		"OptionButton":
 			var option_button := OptionButton.new()
 			option_button.set_flat(true)
-			if setting == "default_wall_texture":
+			if setting == "outline_mode":
+				option_button.add_item("Off", 0)
+				option_button.add_item("Black Silhouette", 1)
+				option_button.add_item("Chunk Outline", 2)
+				option_button.select(clampi(int(s_value) if s_value != null else 0, 0, 2))
+			elif setting == "default_wall_texture":
 				MarchingSquaresTerrainPlugin._ensure_texture_names_resource(attribute_list.vp_tex_names)
 				var names : Array = attribute_list.vp_tex_names.get("texture_names")
 				var VOID_SLOT := 15
@@ -575,7 +592,7 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 							continue
 						option_button.add_item(str(names[slot_id]), slot_id)
 				# Select by id, not by index.
-				var default_id := clampi(int(s_value), 0, max(names.size() - 1, 0))
+				var default_id := clampi(int(s_value) if s_value != null else 0, 0, max(names.size() - 1, 0))
 				var select_idx := 0
 				for idx in range(option_button.item_count):
 					if option_button.get_item_id(idx) == default_id:
@@ -586,19 +603,19 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 				option_button.add_item("Smoothed Triangles")
 				option_button.add_item("Hard Squares")
 				option_button.add_item("Hard Triangles")
-				option_button.selected = s_value
+				option_button.selected = int(s_value) if s_value != null else 0
 			elif setting == "extra_collision_layer":
 				for i in range(24):
 					option_button.add_item(str(i + 9))
-				option_button.selected = s_value - 9
+				option_button.selected = (int(s_value) - 9) if s_value != null else 0
 			elif setting == "wind_mode":
 				option_button.add_item("Smooth")
 				option_button.add_item("Gust")
 				option_button.add_item("Pulse")
 				option_button.add_item("Turbulence")
-				option_button.selected = s_value
+				option_button.selected = int(s_value) if s_value != null else 0
 			else:
-				option_button.selected = s_value
+				option_button.selected = int(s_value) if s_value != null else 0
 			option_button.item_selected.connect(func(index): _on_terrain_setting_changed(setting, option_button.get_item_id(index)))
 			option_button.set_custom_minimum_size(Vector2(140, 25))
 			return option_button
@@ -790,6 +807,16 @@ func make_spinbox(val: float, step: float) -> SpinBox:
 
 
 func _make_editor_name(var_name: String) -> String:
+	match var_name:
+		"global_noise_texture":
+			return "Global Noise Texture"
+		"global_noise_scroll":
+			return "Noise Scroll"
+		"global_noise_scale":
+			return "Noise Scale"
+		"global_noise_strength":
+			return "Noise Strength"
+	
 	var loose_words := var_name.split("_")
 	for word in loose_words:
 		loose_words[loose_words.find(word)] = word.capitalize()
@@ -797,8 +824,11 @@ func _make_editor_name(var_name: String) -> String:
 
 
 func _hide_textures(texture_node: Node) -> void:
-	var texture_button := texture_node.get_child(0) as Button
-	texture_button.visible = false
+	# Some editor controls embed a thumbnail/preview node we don't want in this compact panel.
+	# Do NOT hide the main buttons, otherwise the built-in "Edit" action can't focus the Inspector.
+	for child in texture_node.get_children():
+		if child is TextureRect:
+			child.visible = false
 
 
 func _format_constant_string(text: String) -> String:

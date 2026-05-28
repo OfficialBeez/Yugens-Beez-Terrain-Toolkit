@@ -51,8 +51,9 @@ uniform float rl_noise_tile_size : hint_range(0.01, 1.0) = 0.075;
 uniform float rl_noise_strength : hint_range(0.0, 10.0) = 10.0;
 uniform float global_noise_scale = 0.08;
 uniform float global_noise_strength = 0.3;
-uniform bool global_noise_scroll = false;
-uniform int global_noise_octaves : hint_range(1, 6) = 5;
+// 0..1 multiplier for scroll speed (0 = off)
+uniform float global_noise_scroll = 0.0;
+uniform sampler2D global_noise_texture : hint_default_white, repeat_enable, filter_linear;
 
 // Used to keep terrain global-noise scroll aligned with grass wind.
 uniform vec2 wind_direction = vec2(1.0, 1.0);
@@ -66,9 +67,58 @@ uniform int bands : hint_range(1, 10) = 5;
 uniform float shadow_intensity : hint_range(-1.0, 0.5, 0.05) = 0.00;
 group_uniforms;
 
+group_uniforms Visuals.Edge_Highlights;
+uniform bool use_edge_highlights = false;
+// Screen-space edge outlines (toon style).
+uniform vec4 edge_highlight_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform float edge_highlight_strength : hint_range(0.0, 1.0, 0.01) = 0.35;
+// Higher = thicker / more sensitive.
+uniform float edge_highlight_width : hint_range(0.0, 32.0, 0.25) = 10.0;
+// Higher = harder edge (more ink-like).
+uniform float edge_highlight_power : hint_range(0.1, 8.0, 0.1) = 2.0;
+// Thresholding to avoid the "white wash" effect.
+uniform float edge_highlight_threshold : hint_range(0.0, 5.0, 0.01) = 0.65;
+uniform float edge_highlight_softness : hint_range(0.0, 1.0, 0.001) = 0.02;
+// Allow separating silhouette (depth) vs crease (normal) edges.
+uniform float edge_highlight_normal_weight : hint_range(0.0, 4.0, 0.05) = 1.0;
+
+// Depth-based band-pass for "inner" outlines (step edges).
+// We use view-space depth derivatives; scale/thresholds are tuned per project.
+uniform float inner_outline_depth_scale : hint_range(0.0, 50000.0, 50.0) = 12000.0;
+// Turns on at this depth-edge magnitude.
+uniform float inner_outline_threshold : hint_range(0.0, 10.0, 0.01) = 0.55;
+uniform float inner_outline_softness : hint_range(0.0, 2.0, 0.001) = 0.05;
+// Reject very large depth discontinuities (outer silhouette).
+uniform float inner_outline_silhouette_threshold : hint_range(0.0, 50.0, 0.01) = 2.0;
+uniform float inner_outline_silhouette_softness : hint_range(0.0, 5.0, 0.001) = 0.10;
+
+group_uniforms;
+
+group_uniforms Visuals.Seam_Outline;
+// Stable, mesh-driven outline at the floor/wall seam (no screen-space jitter).
+uniform bool use_seam_outline = false;
+
+// When seam_outline_from_albedo is false, this is the absolute outline color.
+// When true, RGB acts as a multiplier and A is treated as opacity.
+uniform vec4 seam_outline_color : source_color = vec4(1.0, 1.0, 1.0, 0.9);
+
+// If true, derive the outline color from the underlying surface ALBEDO (preserves hue)
+// and optionally lift/darken it via seam_outline_lift.
+uniform bool seam_outline_from_albedo = false;
+
+// -1..1 value shift applied to the derived outline color.
+//  >0 lifts toward white (pastel), <0 pushes toward black.
+uniform float seam_outline_lift : hint_range(-1.0, 1.0, 0.01) = 0.35;
+
+uniform float seam_outline_width : hint_range(0.0, 32.0, 0.25) = 2.0;
+uniform float seam_outline_strength : hint_range(0.0, 1.0, 0.01) = 1.0;
+
+group_uniforms;
+
 varying vec3 vertex_normal;
 varying vec3 custom1;
 varying flat float nearest_wall_color_idx;
+varying flat float seam_flag;
 varying vec3 world_pos;
 #ifdef BAKE_MODE
 varying vec3 virtual_vertex;
@@ -84,6 +134,7 @@ varying vec4 vc_color_1;
 varying flat vec3 mat_indices;
 varying vec2 mat_weights;
 varying float use_vertex_colors;
+
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -118,6 +169,66 @@ float fbm_octaves(vec2 p, int octaves) {
 		amplitude *= 0.5;
 	}
 	return value;
+}
+
+// Cloud field based on layered value-noise fBm (ported from arlez80/cloud-shader, MIT).
+// Returns gn in [0..1] where 1=no darkening, 0=fully dark cloud.
+const float CLOUD_NOISE_SCALE = 0.00005;
+const float CLOUD_SEED = -1000.0;
+const vec2 CLOUD_SPEED = vec2(2.0, 0.0);
+const vec2 CLOUD_TRANSFORM_SPEED = vec2(0.0, 0.0001);
+
+highp float cloud_random(vec2 pos) {
+	// Use continuous hash (avoid mod() discontinuities that can create line artifacts).
+	return fract(sin(dot(pos, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+float cloud_value_noise(vec2 pos) {
+	vec2 p = floor(pos);
+	vec2 f = fract(pos);
+
+	float v00 = cloud_random(p + vec2(0.0, 0.0));
+	float v10 = cloud_random(p + vec2(1.0, 0.0));
+	float v01 = cloud_random(p + vec2(0.0, 1.0));
+	float v11 = cloud_random(p + vec2(1.0, 1.0));
+
+	vec2 u = smoothstep(0.0, 1.0, f);
+	return mix(mix(v00, v10, u.x), mix(v01, v11, u.x), u.y);
+}
+
+float _cloud_h(vec2 pos_a, vec2 pos_b) {
+	float h = (
+		cloud_value_noise(pos_a) * 8.0 +
+		cloud_value_noise(pos_a * 4.2) * 8.0 +
+		cloud_value_noise(pos_a * 8.4) * 8.0 +
+		cloud_value_noise(pos_a * 17.6) * 8.0 +
+		cloud_value_noise(pos_a * 61.8) * 4.0 +
+		cloud_value_noise(pos_b * 90.1) * 4.0 +
+		cloud_value_noise(pos_b * 110.1) * 0.0 +
+		cloud_value_noise(pos_b * 220.0) * 0.0
+	) / 46.0;
+	return clamp(h, 0.0, 1.0);
+}
+
+float cloud_shadow_field(vec2 world_xz) {
+	// Same CloudShadow.shader h computation, but keep it signed (h - bias) so we can anti-alias the threshold.
+	float scale = global_noise_scale * 1250.0;
+	vec2 p = world_xz * scale;
+	vec2 pos_a = (vec2(p.x, p.y + CLOUD_SEED) + (TIME * CLOUD_SPEED)) * CLOUD_NOISE_SCALE;
+	vec2 pos_b = pos_a + CLOUD_TRANSFORM_SPEED * TIME;
+
+	// Blur/low-pass to reduce grid-aligned "digital camo" edges.
+	vec2 o = vec2(0.37, 0.17);
+	vec2 op = vec2(o.y, -o.x);
+	float h = (
+		_cloud_h(pos_a, pos_b) * 0.40 +
+		_cloud_h(pos_a + o, pos_b + o) * 0.15 +
+		_cloud_h(pos_a - o, pos_b - o) * 0.15 +
+		_cloud_h(pos_a + op, pos_b + op) * 0.15 +
+		_cloud_h(pos_a - op, pos_b - op) * 0.15
+	);
+	float bias = 0.4;
+	return h - bias;
 }
 
 int get_material_index(vec4 vc_col_0, vec4 vc_col_1) {
@@ -392,7 +503,9 @@ float get_world_noise(vec3 world_position, float tile_size) {
 void vertex() {
 	vertex_normal = NORMAL;
 	custom1 = CUSTOM1.rgb;
-	nearest_wall_color_idx = CUSTOM1.a;
+	float a = CUSTOM1.a;
+	nearest_wall_color_idx = floor(a);
+	seam_flag = step(0.25, fract(a));
 #ifndef BAKE_MODE
 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 #else
@@ -412,7 +525,8 @@ void vertex() {
 	use_vertex_colors = 0.0;
 	material_index = int(round(mat_indices.x));
 
-	bool is_floor = dot(vertex_normal, vec3(0.0, 1.0, 0.0)) > wall_threshold;
+	// Treat wall vertices explicitly via UV sentinel (walls use UV=(2,2)).
+	bool is_floor = (UV.x < 1.5) && (dot(vertex_normal, vec3(0.0, 1.0, 0.0)) > wall_threshold);
 	if (use_flat_normals && is_floor)
 		NORMAL = vec3(0.0, 1.0, 0.0);
 }
@@ -427,7 +541,8 @@ void fragment() {
 
 	vec2 tiling_factor_floor = vec2(1.0 / float(chunk_size.x - 1), 1.0 / float(chunk_size.z - 1));
 	vec2 tiling_factor_wall = vec2(1.0 / float(chunk_size.x - 1), 1.0 / float(chunk_size.y - 1));
-	bool is_floor = dot(vertex_normal, vec3(0.0, 1.0, 0.0)) > wall_threshold;
+	// Treat wall vertices explicitly via UV sentinel (walls use UV=(2,2)).
+	bool is_floor = (UV.x < 1.5) && (dot(vertex_normal, vec3(0.0, 1.0, 0.0)) > wall_threshold);
 
 	vec3 abs_normal = abs(vertex_normal);
 	vec3 tri_weights = vec3(abs_normal.x, 0.0, abs_normal.z);
@@ -592,6 +707,57 @@ void fragment() {
 		ALBEDO = mix(floor_color.rgb, rl_x + rl_z, mixed_blend_factor);
 	}
 
+	// Inner outlines (white): screen-space variant (can be jittery). Kept for optional use.
+	if (use_edge_highlights && is_floor) {
+		float dz = abs(dFdx(FRAGCOORD.z)) + abs(dFdy(FRAGCOORD.z));
+		float dzm = dz * max(inner_outline_depth_scale, 0.0);
+
+		float inner = smoothstep(inner_outline_threshold, inner_outline_threshold + max(inner_outline_softness, 0.00001), dzm);
+		float sil = smoothstep(inner_outline_silhouette_threshold, inner_outline_silhouette_threshold + max(inner_outline_silhouette_softness, 0.00001), dzm);
+		inner *= (1.0 - sil);
+
+		vec3 n = normalize(vertex_normal);
+		float dn = (length(dFdx(n)) + length(dFdy(n))) * edge_highlight_normal_weight;
+		float crease = smoothstep(edge_highlight_threshold, edge_highlight_threshold + max(edge_highlight_softness, 0.00001), dn * (max(edge_highlight_width, 0.0) * 0.35));
+
+		float mask = clamp(max(inner, crease), 0.0, 1.0);
+		mask = pow(mask, edge_highlight_power);
+
+		float amt = clamp(mask * edge_highlight_strength, 0.0, 1.0);
+		ALBEDO = mix(ALBEDO, edge_highlight_color.rgb, amt);
+	}
+
+	// Stable outline at floor/wall junction + along wall face edges.
+	// seam_flag ensures we only draw this where the cell actually contains a wall/cliff.
+	if (use_seam_outline && seam_flag > 0.5) {
+		float amt = 0.0;
+		if (is_floor) {
+			// Floor rim: thin band at the terrace edge.
+			float t = max(UV.x, UV.y);
+			float band = max(fwidth(t) * seam_outline_width, 0.0001);
+			amt = smoothstep(1.0 - band, 1.0, t);
+		} else {
+			// Walls: outer-boundary outline is generated by a separate mesh (to avoid per-cell striping).
+			amt = 0.0;
+		}
+		amt = clamp(amt * seam_outline_strength, 0.0, 1.0);
+
+		vec3 target_rgb = seam_outline_color.rgb;
+		if (seam_outline_from_albedo) {
+			vec3 base = ALBEDO;
+			vec3 lifted = base;
+			if (seam_outline_lift > 0.0) {
+				lifted = mix(base, vec3(1.0), seam_outline_lift);
+			} else if (seam_outline_lift < 0.0) {
+				lifted = mix(base, vec3(0.0), -seam_outline_lift);
+			}
+			// Allow a subtle tint bias while still preserving hue by default (rgb = 1,1,1).
+			target_rgb = lifted * seam_outline_color.rgb;
+		}
+
+		ALBEDO = mix(ALBEDO, target_rgb, amt * seam_outline_color.a);
+	}
+
 	// Material outlines ("land foam" style). Uses weight equality band, so it doesn't widen with brush falloff.
 	if (is_floor) {
 		if (edge_mat_a >= 0 && edge_mat_b >= 0
@@ -623,29 +789,35 @@ void fragment() {
 		}
 	}
 
-	if (is_floor && global_noise_strength > 0.0) {
+
+	if (global_noise_strength > 0.0) {
 		vec2 scroll = vec2(0.0);
-		if (global_noise_scroll) {
+		if (global_noise_scroll > 0.0) {
 			vec2 dir = normalize(wind_direction);
-			scroll = dir * TIME * wind_speed * 3.0;
+			scroll = dir * TIME * wind_speed * 3.0 * global_noise_scroll;
 		}
-		float gn = fbm_octaves(vec2(
-			(vertex_pos.x + scroll.x) * global_noise_scale + (vertex_pos.z + scroll.y) * 0.031,
-			(vertex_pos.z + scroll.y) * global_noise_scale - (vertex_pos.x + scroll.x) * 0.023), global_noise_octaves);
-		gn = smoothstep(0.0, 1.0, gn);
-		ALBEDO *= mix(1.0 - global_noise_strength, 1.0 + (global_noise_strength * 0.5), gn);
+
+		vec2 uv = (vec2(world_pos.x, world_pos.z) + scroll) * global_noise_scale;
+		uv = fract(uv);
+
+		float gn = texture(global_noise_texture, uv).r;
+		float mult = mix(1.0 - global_noise_strength, 1.0, clamp(gn, 0.0, 1.0));
+		ALBEDO *= mult;
 	}
+
 }
 
 void light() {
 	float NdotL = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
-	float toon_light;
-	if (use_cell_shading) {
-		float stepped = ceil(NdotL * float(bands)) / float(bands);
-		toon_light = mix(shadow_intensity, 0.3, stepped);
-	} else {
-		toon_light = NdotL * 0.3;
-	}
-	toon_light *= ATTENUATION;
+	float stepped = use_cell_shading ? (ceil(NdotL * float(bands)) / float(bands)) : NdotL;
+
+	// Base toon weight (before attenuation).
+	float toon_weight = use_cell_shading
+		? mix(shadow_intensity, 0.3, stepped)
+		: (NdotL * 0.3);
+
+	// Edge Highlights are currently implemented in fragment() as a black outline.
+
+	float toon_light = toon_weight * ATTENUATION;
 	DIFFUSE_LIGHT += mix(shadow_color.rgb, LIGHT_COLOR.rgb, toon_light);
 }

@@ -1,0 +1,10 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://dljm4h3acilvi"]
+
+[ext_resource type="Shader" uid="uid://btjbu7ucriwis" path="res://addons/MarchingSquaresTerrain/resources/shaders/mst_outline_nextpass.gdshader" id="1_outline"]
+
+[resource]
+render_priority = -2
+shader = ExtResource("1_outline")
+shader_parameter/outline_color = Color(0, 0, 0, 1)
+shader_parameter/outline_thickness = 0.02
+shader_parameter/wall_only = 1.0

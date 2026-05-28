@@ -254,9 +254,11 @@ func add_point(x: float, y: float, z: float, u: float, v: float):
 		x = 1 - z
 		z = temp
 	
-	# UV - used for ledge detection. X = closeness to top terrace, Y = closeness to bottom of terrace
-	# Walls will always have UV of 1, 1
-	var uv = Vector2(u, v) if floor_mode else Vector2(1, 1)
+	# Floor UV payload: used for ledge detection. X = closeness to top terrace, Y = closeness to bottom of terrace
+	# Wall UV payload: use local (x,z) within the cell so shaders can do stable wall edge lines.
+	# Walls still use a sentinel UV outside the [0..1] floor range so shaders can reliably detect walls.
+	var uv_payload = Vector2(u, v) if floor_mode else Vector2(x, z)
+	var uv = uv_payload if floor_mode else Vector2(2, 2)
 	
 	# Same calculations from here
 	var vert = Vector3((cell_coords.x+x) * chunk.cell_size.x, y, (cell_coords.y+z) * chunk.cell_size.y)
@@ -272,7 +274,7 @@ func add_point(x: float, y: float, z: float, u: float, v: float):
 	pts.append(vert)
 	uvs.append(uv)
 	uv2s.append(uv2)
-	var colors: Dictionary = color_helper.blend_colors(Vector3(x,y,z), uv)
+	var colors: Dictionary = color_helper.blend_colors(Vector3(x,y,z), uv_payload)
 	custom_1_values.append(colors["custom_1_value"])
 	color_0s.append(colors["color_0"])
 	color_1s.append(colors["color_1"])

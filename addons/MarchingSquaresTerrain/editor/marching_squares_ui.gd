@@ -285,6 +285,9 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"outline_width":
 			if p_value is float or p_value is int:
 				terrain.outline_width = float(p_value)
+		"outline_mode":
+			if p_value is int or p_value is float:
+				terrain.outline_mode = int(p_value)
 		"ridge_threshold":
 			if p_value is float:
 				terrain.ridge_threshold = p_value
@@ -311,12 +314,12 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"global_noise_scale":
 			if p_value is float:
 				terrain.global_noise_scale = p_value
-		"global_noise_octaves":
-			if p_value is int or p_value is float:
-				terrain.global_noise_octaves = int(p_value)
+		"global_noise_texture":
+			if p_value is Texture2D or p_value == null:
+				terrain.global_noise_texture = p_value
 		"global_noise_scroll":
-			if p_value is bool:
-				terrain.global_noise_scroll = p_value
+			if p_value is float or p_value is int:
+				terrain.global_noise_scroll = float(p_value)
 		"wind_mode":
 			if p_value is int:
 				terrain.wind_mode = p_value

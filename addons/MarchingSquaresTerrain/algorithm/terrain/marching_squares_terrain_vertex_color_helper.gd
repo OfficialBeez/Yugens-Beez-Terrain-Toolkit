@@ -20,11 +20,13 @@ var cell_wall_upper_color_0 : Color
 var cell_wall_lower_color_1 : Color
 var cell_wall_upper_color_1 : Color
 var cell_is_boundary : bool = false
-# Per-cell materials for to supports up to 3 textures
+# Per-cell materials to support up to 3 textures.
+# IMPORTANT: walls must compute their dominant materials from wall_color_map, not ground color_map.
 var cell_mat_a : int = 0
 var cell_mat_b : int = 0
 var cell_mat_c : int = 0
 var cell_weight_b : float = 0.0
+var _mat_pair_is_floor : bool = true
 
 # NOTE: Untyped to avoid @tool cyclic load issues (chunk <-> helper <-> cell).
 var chunk
@@ -52,6 +54,13 @@ func blend_colors(vertex: Vector3, uv: Vector2, diag_midpoint: bool = false) -> 
 	var rl_source_map_1 : PackedColorArray = sources[3]
 	var use_wall_colors = (source_map_0 == chunk.wall_color_map_0)
 	
+	# Ensure material selection (cell_mat_a/b/c) matches the map we are currently sampling.
+	# Without this, wall vertices can inherit the floor material set and end up sampling floor textures.
+	var want_floor_pair: bool = bool(cell.floor_mode)
+	if want_floor_pair != _mat_pair_is_floor:
+		calculate_cell_material_pair(source_map_0, source_map_1)
+		_mat_pair_is_floor = want_floor_pair
+	
 	# Terrain texturing is driven by CUSTOM2 (and weight_b in CUSTOM0.r).
 	# COLOR/CUSTOM0 are no longer used to encode the material index directly.
 	colors["color_0"] = Color(0, 0, 0, 0)
@@ -59,8 +68,13 @@ func blend_colors(vertex: Vector3, uv: Vector2, diag_midpoint: bool = false) -> 
 	
 	# is_ridge & is_ledge are already calculated above
 	var c_1_val: Color = Color(chunk.grass_mask_map[cell.cell_coords.y*chunk.dimensions.x + cell.cell_coords.x]) # Grass mask
-	c_1_val.g = 1.0 if is_ridge else 0.0
-	c_1_val.b = 1.0 if is_ledge else 0.0
+	if cell.floor_mode:
+		c_1_val.g = 1.0 if is_ridge else 0.0
+		c_1_val.b = 1.0 if is_ledge else 0.0
+	else:
+		# For WALL vertices, repurpose g/b to carry stable wall-local (u,v) so shaders can do wall edge lines.
+		c_1_val.g = uv.x
+		c_1_val.b = uv.y
 	
 	# Calculate and store the closest wall color index to the ridge/ledge.
 	# With 256 slots, we can no longer rely on the legacy one-hot interpolation.
@@ -84,7 +98,9 @@ func blend_colors(vertex: Vector3, uv: Vector2, diag_midpoint: bool = false) -> 
 	if w_c > best_w: best_w = w_c; rl_idx = wall_c
 	if w_d > best_w: rl_idx = wall_d
 	
-	c_1_val.a = rl_idx
+	# Pack a stable "seam" flag into the fractional part of CUSTOM1.a.
+	# Integer part = nearest wall texture index (0..255), fractional part = 0.5 when this cell has walls.
+	c_1_val.a = float(rl_idx) + (0.5 if cell_has_walls_for_blend else 0.0)
 	colors["custom_1_value"] = c_1_val
 	
 	# Material blend data is always driven by the CUSTOM2 encoding.
@@ -104,8 +120,10 @@ func calculate_corner_colors():
 	# Determine if this is a boundary cell (significant height variation)
 	cell_is_boundary = (cell_max_height - cell_min_height) > cell.merge_threshold
 	
-	# Calculate the 2 dominant textures for this cell
+	# Default to FLOOR material selection at cell start.
+	# Wall vertices will switch this on-demand in blend_colors().
 	calculate_cell_material_pair(chunk.color_map_0, chunk.color_map_1)
+	_mat_pair_is_floor = true
 	
 	if cell_is_boundary:
 		# Identify corners at each height level for height-based color sampling
