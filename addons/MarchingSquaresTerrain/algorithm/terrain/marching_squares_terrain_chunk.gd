@@ -88,6 +88,7 @@ var _collision_shape_node: CollisionShape3D = null
 const _INTERNAL_OUTLINE_SHADER := preload("res://addons/MarchingSquaresTerrain/resources/shaders/mst_internal_edge_outline.gdshader")
 var _internal_outline_instance: MeshInstance3D = null
 var _internal_outline_material: ShaderMaterial = null
+var _internal_outline_dirty: bool = true
 
 #region blend option vars
 # Terrain blend options to allow for smooth color and height blend influence at transitions and at different heights 
@@ -168,26 +169,8 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 	# If any outline mode is enabled we keep the live shader so the outline stays visible.
 	var _outline_mode: int = int(terrain_system.outline_mode) if terrain_system else 0
 	if not EngineWrapper.instance.is_editor() and terrain_system.enable_runtime_texture_baking and _outline_mode == 0:
-		var baker := MarchingSquaresGeometryBaker.new()
-		baker.terrain_system = terrain_system
-		baker.polygon_texture_resolution = terrain_system.polygon_texture_resolution
-		baker.finished.connect(func(mesh_: Mesh, _original: MeshInstance3D, img: Image):
-			mesh = mesh_
-			var mat : Material
-			if terrain_system.bake_material_override: 
-				mat = terrain_system.bake_material_override.duplicate()
-			else:
-				mat = bake_material.duplicate()
-				baker.transfer_shader_props(terrain_system.terrain_material, mat)
-			
-			if mat is StandardMaterial3D:
-				mat.albedo_texture = ImageTexture.create_from_image(img)
-			elif mat is ShaderMaterial:
-				mat.set_shader_parameter("texture_albedo", ImageTexture.create_from_image(img))
-			if mesh and mesh.get_surface_count() > 0:
-				mesh.surface_set_material(0, mat)
-		, CONNECT_ONE_SHOT)
-		baker.bake_geometry_texture(self, get_tree())
+		# Queue runtime baking through the terrain system so large maps don't start many bakes at once.
+		terrain_system.request_runtime_texture_bake(self)
 
 
 func _notification(what: int) -> void:
@@ -312,6 +295,7 @@ func regenerate_mesh(use_threads: bool = false):
 			mesh.surface_set_material(0, terrain_system.get_chunk_surface_material())
 	
 	create_collision_with_depth(terrain_system.collision_depth)
+	_internal_outline_dirty = true
 	_regenerate_internal_edge_outline_mesh()
 	
 	var elapsed_time : int = Time.get_ticks_msec() - start_time
@@ -327,18 +311,16 @@ func _cleanup_old_chunk_outline_overlays() -> void:
 
 
 func apply_internal_edge_outline_settings(enabled: bool, px: float) -> void:
+	# IMPORTANT: Do not rebuild meshes here. Toggling outline mode across many chunks can otherwise
+	# freeze the editor by doing all rebuilds in a single frame. Terrain queues rebuilds instead.
 	if not enabled or px <= 0.0:
 		if _internal_outline_instance:
-			_internal_outline_instance.mesh = null
 			_internal_outline_instance.visible = false
 		return
 	_ensure_internal_edge_outline_instance()
 	_internal_outline_instance.visible = true
 	if _internal_outline_material:
 		_internal_outline_material.set_shader_parameter("outline_px", px)
-	# If toggled on after being off, we need to rebuild once.
-	if _internal_outline_instance.mesh == null:
-		_regenerate_internal_edge_outline_mesh()
 
 
 func _ensure_internal_edge_outline_instance() -> void:
@@ -400,6 +382,10 @@ func _accum_internal_edge(a: Vector3, b: Vector3, tri_is_floor: bool, quant_scal
 		wall_counts[k] = int(wall_counts.get(k, 0)) + 1
 
 
+func rebuild_internal_edge_outline_mesh() -> void:
+	_regenerate_internal_edge_outline_mesh()
+
+
 func _regenerate_internal_edge_outline_mesh() -> void:
 	if terrain_system == null:
 		return
@@ -407,15 +393,19 @@ func _regenerate_internal_edge_outline_mesh() -> void:
 	var enabled := (int(terrain_system.outline_mode) == int(MarchingSquaresTerrain.OutlineMode.BLACK_SILHOUETTE))
 	var px := float(terrain_system.outline_px)
 	if not enabled or px <= 0.0:
-		apply_internal_edge_outline_settings(false, 0.0)
+		if _internal_outline_instance:
+			_internal_outline_instance.visible = false
 		return
 
 	_ensure_internal_edge_outline_instance()
-	apply_internal_edge_outline_settings(true, px)
+	_internal_outline_instance.visible = true
+	if _internal_outline_material:
+		_internal_outline_material.set_shader_parameter("outline_px", px)
 
 	var have_cell_geo := not (cell_geometry == null or cell_geometry.is_empty())
 	if not have_cell_geo:
 		_internal_outline_instance.mesh = null
+		# No geometry yet; keep dirty so enabling later will rebuild.
 		return
 
 	var edge_points: Dictionary = {}
@@ -487,11 +477,13 @@ func _regenerate_internal_edge_outline_mesh() -> void:
 	var outline_mesh: ArrayMesh = st_outline.commit()
 	if outline_mesh == null or outline_mesh.get_surface_count() == 0:
 		_internal_outline_instance.mesh = null
+		_internal_outline_dirty = false
 		return
 
 	_internal_outline_instance.mesh = outline_mesh
 	if _internal_outline_material:
 		outline_mesh.surface_set_material(0, _internal_outline_material)
+	_internal_outline_dirty = false
 
 
 func generate_terrain_cells(use_threads: bool):

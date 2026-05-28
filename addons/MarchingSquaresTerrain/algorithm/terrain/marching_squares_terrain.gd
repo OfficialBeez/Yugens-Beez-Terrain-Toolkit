@@ -68,6 +68,10 @@ enum StorageMode {
 ## Used for overriding the material of the baked terrain texture.
 @export var bake_material_override : Material
 
+# Runtime texture baking queue (prevents huge hitches by baking one chunk at a time).
+var _runtime_bake_active: bool = false
+var _runtime_bake_queue: Array[MarchingSquaresTerrainChunk] = []
+
 ## True after external storage has been initialized.
 ## Used to detect when migration from embedded data is needed.
 @export_storage var _storage_initialized : bool = false
@@ -689,6 +693,70 @@ func _init() -> void:
 	_rebuild_palette_uniforms()
 
 
+func request_runtime_texture_bake(chunk: MarchingSquaresTerrainChunk) -> void:
+	if chunk == null or not is_instance_valid(chunk):
+		return
+	if EngineWrapper.instance.is_editor():
+		return
+	if not enable_runtime_texture_baking:
+		return
+	# Runtime baking is only intended when outlines are OFF (otherwise we want the live shader).
+	if outline_mode != OutlineMode.OFF:
+		return
+
+	# De-dupe requests.
+	if _runtime_bake_queue.has(chunk):
+		return
+	_runtime_bake_queue.append(chunk)
+	if not _runtime_bake_active:
+		_runtime_bake_active = true
+		call_deferred("_runtime_bake_step")
+
+
+func _runtime_bake_step() -> void:
+	if outline_mode != OutlineMode.OFF or not enable_runtime_texture_baking:
+		_runtime_bake_queue.clear()
+		_runtime_bake_active = false
+		return
+
+	while not _runtime_bake_queue.is_empty():
+		var chunk: MarchingSquaresTerrainChunk = _runtime_bake_queue.pop_front()
+		if not is_instance_valid(chunk):
+			continue
+		# Skip if the chunk doesn't have a mesh yet.
+		if chunk.mesh == null or not (chunk.mesh is ArrayMesh):
+			continue
+
+		var baker := MarchingSquaresGeometryBaker.new()
+		baker.terrain_system = self
+		baker.polygon_texture_resolution = polygon_texture_resolution
+		baker.finished.connect(func(mesh_: Mesh, _original: MeshInstance3D, img: Image):
+			if is_instance_valid(chunk):
+				chunk.mesh = mesh_
+				var mat: Material
+				if bake_material_override:
+					mat = bake_material_override.duplicate()
+				else:
+					mat = chunk.bake_material.duplicate()
+					baker.transfer_shader_props(terrain_material, mat)
+
+				if mat is StandardMaterial3D:
+					mat.albedo_texture = ImageTexture.create_from_image(img)
+				elif mat is ShaderMaterial:
+					mat.set_shader_parameter("texture_albedo", ImageTexture.create_from_image(img))
+				if chunk.mesh and chunk.mesh.get_surface_count() > 0:
+					chunk.mesh.surface_set_material(0, mat)
+
+			# Continue with the next chunk on the next frame.
+			call_deferred("_runtime_bake_step")
+		, CONNECT_ONE_SHOT)
+
+		baker.bake_geometry_texture(chunk, get_tree())
+		return
+
+	_runtime_bake_active = false
+
+
 func get_chunk_surface_material() -> Material:
 	# Black silhouette outline must render BEFORE the terrain, otherwise it gets depth-tested away.
 	if outline_mode == OutlineMode.BLACK_SILHOUETTE and outline_next_pass_material and terrain_material:
@@ -705,6 +773,10 @@ func get_chunk_surface_material() -> Material:
 
 var _outline_apply_deferred: bool = false
 var _outline_apply_timer: Timer = null
+
+# Internal edge outlines: rebuild gradually to avoid editor freezes when enabling silhouette on many chunks.
+var _internal_outline_rebuild_active: bool = false
+var _internal_outline_rebuild_queue: Array[MarchingSquaresTerrainChunk] = []
 
 var _grass_regen_timer: Timer = null
 
@@ -762,6 +834,39 @@ func _apply_outline_next_pass_deferred() -> void:
 	_apply_outline_next_pass()
 
 
+func _start_internal_outline_rebuild() -> void:
+	if _internal_outline_rebuild_active:
+		return
+	_internal_outline_rebuild_queue.clear()
+	for chunk: MarchingSquaresTerrainChunk in chunks.values():
+		if chunk and chunk.get("_internal_outline_dirty") == true:
+			_internal_outline_rebuild_queue.append(chunk)
+	if _internal_outline_rebuild_queue.is_empty():
+		return
+	_internal_outline_rebuild_active = true
+	call_deferred("_internal_outline_rebuild_step")
+
+
+func _internal_outline_rebuild_step() -> void:
+	# Abort if silhouette got disabled mid-queue.
+	if outline_mode != OutlineMode.BLACK_SILHOUETTE or outline_px <= 0.0:
+		_internal_outline_rebuild_queue.clear()
+		_internal_outline_rebuild_active = false
+		return
+
+	var per_frame := 1
+	while per_frame > 0 and not _internal_outline_rebuild_queue.is_empty():
+		var chunk: MarchingSquaresTerrainChunk = _internal_outline_rebuild_queue.pop_back()
+		if is_instance_valid(chunk):
+			chunk.rebuild_internal_edge_outline_mesh()
+		per_frame -= 1
+
+	if _internal_outline_rebuild_queue.is_empty():
+		_internal_outline_rebuild_active = false
+	else:
+		call_deferred("_internal_outline_rebuild_step")
+
+
 func _apply_outline_next_pass() -> void:
 	if not terrain_material:
 		return
@@ -789,6 +894,13 @@ func _apply_outline_next_pass() -> void:
 		# Internal edge outline overlay (seams + wall edges inside the chunk).
 		if chunk:
 			chunk.apply_internal_edge_outline_settings(use_black_silhouette, outline_px)
+
+	# Rebuild internal edge meshes gradually when enabling silhouette, so we don't stall the editor.
+	if use_black_silhouette and outline_px > 0.0:
+		_start_internal_outline_rebuild()
+	else:
+		_internal_outline_rebuild_queue.clear()
+		_internal_outline_rebuild_active = false
 
 
 
