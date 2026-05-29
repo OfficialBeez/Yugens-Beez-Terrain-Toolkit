@@ -8,10 +8,26 @@ class_name LodChunkManager
 
 const LodMeshBuilderScript = preload("res://addons/MarchingSquaresTerrain/runtime_lod/LodMeshBuilder.gd")
 
+enum SimplePreset {
+	CUSTOM = 0,
+	MST_ONLY_3X3 = 1,
+	PROXY_ONLY_AUTHORED = 2,
+	PROXY_ONLY_INFINITE_NOISE = 3,
+	HYBRID_BALANCED = 4,
+}
+
+@export_group("Simple Presets")
+# Select a preset to quickly configure the most common/robust settings.
+# Presets are applied on _ready (if apply_preset_on_ready is true).
+@export var simple_preset: SimplePreset = SimplePreset.CUSTOM
+@export var apply_preset_on_ready: bool = true
+
+@export_group("References")
 @export var terrain: Node
 @export var terrain_path: NodePath
 @export var camera_paths: Array[NodePath] = []
 
+@export_group("Mode")
 # When using the LOD system, the source MarchingSquaresTerrain is typically used as a data source
 # (metadata + material params) and should not render at the same time (avoids z-fighting).
 # NOTE: We do NOT hide the whole terrain node (that would also hide any children like LodChunks).
@@ -39,27 +55,29 @@ const LodMeshBuilderScript = preload("res://addons/MarchingSquaresTerrain/runtim
 # If true, chunks are spawned under a helper node on the terrain (keeps scene tree tidy).
 @export var spawn_chunks_under_terrain: bool = true
 
+@export_group("Streaming")
 # Safety cap to avoid accidental massive allocations/crashes if you type huge radii in the inspector.
 @export var radius_safety_cap_chunks: int = 64
-
 @export var view_radius_chunks: int = 6
 @export var unload_radius_chunks: int = 7
+@export var update_interval_sec: float = 0.20
 
+@export_group("LOD")
 @export var lod_count: int = 4
 @export var lod_distances: PackedFloat32Array = PackedFloat32Array([0.0, 80.0, 160.0, 320.0])
 @export var lod_hysteresis: float = 0.15
+@export var skirt_depth: float = 8.0
 
-@export var update_interval_sec: float = 0.20
-
+@export_group("Build / Performance")
 @export var use_async: bool = true
 @export var max_builds_in_flight: int = 2
 @export var max_mesh_applies_per_frame: int = 2
 
-@export var skirt_depth: float = 8.0
-
+@export_group("Caching")
 @export var max_cached_meshes: int = 512
 @export var max_cached_sources: int = 256
 
+@export_group("Fallback data")
 # Optional overrides if you don't want to depend on terrain node.
 @export var fallback_dimensions_xz: int = 33
 @export var fallback_cell_size: Vector2 = Vector2(2.0, 2.0)
@@ -70,6 +88,7 @@ const LodMeshBuilderScript = preload("res://addons/MarchingSquaresTerrain/runtim
 # generate a fake chunk from noise (prevents "extra terrain" beyond authored area).
 @export var allow_noise_fallback_when_missing_chunk_data: bool = false
 
+@export_group("Materials")
 @export var material_override: Material
 @export var debug_color_by_lod: bool = false
 
@@ -116,7 +135,81 @@ var _shutting_down: bool = false
 var _task_ids: Array[int] = []
 
 
+func apply_simple_preset(preset: SimplePreset = simple_preset) -> void:
+	_apply_simple_preset(preset)
+
+
+func _apply_simple_preset(preset: SimplePreset) -> void:
+	if preset == SimplePreset.CUSTOM:
+		return
+
+	match preset:
+		SimplePreset.MST_ONLY_3X3:
+			# Strict 3x3: only the 3x3 around the camera is visible.
+			mst_only_streaming = true
+			hybrid_use_mst_near = false
+			hide_source_terrain_visuals = false
+			view_radius_chunks = 1
+			unload_radius_chunks = 1
+			update_interval_sec = 0.15
+
+		SimplePreset.PROXY_ONLY_AUTHORED:
+			mst_only_streaming = false
+			hybrid_use_mst_near = false
+			hide_source_terrain_visuals = true
+			allow_noise_fallback_when_missing_chunk_data = false
+			view_radius_chunks = 6
+			unload_radius_chunks = 7
+			lod_count = 4
+			lod_distances = PackedFloat32Array([0.0, 80.0, 160.0, 320.0])
+			update_interval_sec = 0.20
+			use_async = true
+			max_builds_in_flight = 2
+			max_mesh_applies_per_frame = 2
+			skirt_depth = 8.0
+
+		SimplePreset.PROXY_ONLY_INFINITE_NOISE:
+			mst_only_streaming = false
+			hybrid_use_mst_near = false
+			hide_source_terrain_visuals = true
+			allow_noise_fallback_when_missing_chunk_data = true
+			view_radius_chunks = 6
+			unload_radius_chunks = 7
+			lod_count = 4
+			lod_distances = PackedFloat32Array([0.0, 80.0, 160.0, 320.0])
+			update_interval_sec = 0.20
+			use_async = true
+			max_builds_in_flight = 2
+			max_mesh_applies_per_frame = 2
+			skirt_depth = 8.0
+
+		SimplePreset.HYBRID_BALANCED:
+			mst_only_streaming = false
+			hybrid_use_mst_near = true
+			mst_near_radius_chunks = 2
+			mst_near_use_circle = true
+			hybrid_keep_mst_until_proxy_ready = true
+			hide_source_terrain_visuals = false
+			view_radius_chunks = 7
+			unload_radius_chunks = 8
+			lod_count = 4
+			lod_distances = PackedFloat32Array([0.0, 80.0, 160.0, 320.0])
+			update_interval_sec = 0.20
+			use_async = true
+			max_builds_in_flight = 2
+			max_mesh_applies_per_frame = 2
+			skirt_depth = 8.0
+
+	_rebuild_debug_materials()
+	_rebuild_fallback_material()
+	_recompute_chunk_world_size()
+	if debug_print:
+		print("[LodChunkManager] Applied simple preset: %s" % str(preset))
+
+
 func _ready() -> void:
+	if apply_preset_on_ready:
+		_apply_simple_preset(simple_preset)
 	_chunk_parent = self
 	_recompute_chunk_world_size()
 	_rebuild_debug_materials()

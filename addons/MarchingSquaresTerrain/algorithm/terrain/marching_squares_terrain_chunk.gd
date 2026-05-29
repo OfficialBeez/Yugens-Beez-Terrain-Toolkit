@@ -504,7 +504,11 @@ func generate_terrain_cells(use_threads: bool):
 	# Ensure needs_update matches the current grid before indexing needs_update[z][x].
 	var target_z := max(0, dimensions.z - 1)
 	var target_x := max(0, dimensions.x - 1)
-	var needs_rebuild := (needs_update == null or needs_update.size() != target_z)
+	var needs_rebuild: bool = false
+	if needs_update == null:
+		needs_rebuild = true
+	elif needs_update.size() != target_z:
+		needs_rebuild = true
 	if not needs_rebuild:
 		for z in range(target_z):
 			if needs_update[z] == null or needs_update[z].size() != target_x:
@@ -1011,7 +1015,7 @@ func _recreate_collision_body() -> void:
 	# Set owner for editor visibility at first, but we clear it later
 	if EngineWrapper.instance.is_editor():
 		var scene_root = EngineWrapper.instance.get_root_for_node(self)
-		if scene_root:
+		if scene_root and scene_root.is_ancestor_of(body):
 			body.owner = scene_root
 			col_shape.owner = scene_root
 		for group in get_groups():
@@ -1058,7 +1062,7 @@ func _ensure_collision_body() -> void:
 
 		if EngineWrapper.instance.is_editor():
 			var scene_root = EngineWrapper.instance.get_root_for_node(self)
-			if scene_root:
+			if scene_root and scene_root.is_ancestor_of(_collision_body):
 				_collision_body.owner = scene_root
 				_collision_shape_node.owner = scene_root
 			for group in get_groups():

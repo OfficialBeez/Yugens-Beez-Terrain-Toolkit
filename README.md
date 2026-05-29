@@ -27,7 +27,8 @@ Quick demo:
 Using it with an existing terrain:
 - Add a `LodChunkManager` node to your scene
 - Assign your `MarchingSquaresTerrain` node to the manager’s `terrain` field (or set `terrain_path`)
-- Set `view_radius_chunks`, `lod_distances`, `max_mesh_applies_per_frame` for performance
+- (Recommended) Pick a `simple_preset` (ex: `MST_ONLY_3X3`, `PROXY_ONLY_AUTHORED`, `PROXY_ONLY_INFINITE_NOISE`, `HYBRID_BALANCED`)
+- Or manually set `view_radius_chunks`, `lod_distances`, `max_mesh_applies_per_frame` for performance
 - Seam handling uses *skirts* (set `skirt_depth` > 0 to hide cracks between different LODs)
 
 For community showcases, feature requests and bug reporting, please refer to the [discord](https://discord.gg/ZSeYkTCgft).
