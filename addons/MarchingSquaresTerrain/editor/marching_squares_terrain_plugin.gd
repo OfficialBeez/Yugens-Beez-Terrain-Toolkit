@@ -333,8 +333,10 @@ func _edit(object: Object) -> void:
 		if ui:
 			ui.set_visible(true)
 			current_terrain_node = object
-			if not current_terrain_node.chunk_dimensions_changed.is_connected(_on_chunk_dimensions_changed):
-				current_terrain_node.chunk_dimensions_changed.connect(_on_chunk_dimensions_changed)
+			# Use signal-name connect to avoid hard crashes during script reload/parse errors.
+			var cb := Callable(self, "_on_chunk_dimensions_changed")
+			if current_terrain_node.has_signal("chunk_dimensions_changed") and not current_terrain_node.is_connected("chunk_dimensions_changed", cb):
+				current_terrain_node.connect("chunk_dimensions_changed", cb)
 			
 			# Sync plugin's preset from the selected terrain's saved preset
 			# This ensures each terrain keeps its own preset on selection/reload

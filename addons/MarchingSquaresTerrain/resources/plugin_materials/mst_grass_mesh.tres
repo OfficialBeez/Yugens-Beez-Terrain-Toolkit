@@ -1,29 +1,11 @@
 [gd_resource type="QuadMesh" format=3 uid="uid://dovs51hsvtmga"]
 
 [ext_resource type="Shader" uid="uid://0fijvq5fdcep" path="res://addons/MarchingSquaresTerrain/resources/shaders/mst_grass.gdshader" id="1_jmvec"]
-[ext_resource type="Texture2D" uid="uid://cxvnfgy865wsk" path="res://addons/MarchingSquaresTerrain/resources/plugin_materials/grass_leaf_sprite.png" id="2_yr1wv"]
 [ext_resource type="Texture2D" uid="uid://dk1t5hy2tiil7" path="res://addons/MarchingSquaresTerrain/resources/plugin_materials/wind_noise_texture.tres" id="3_1bgk7"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_fa4te"]
 render_priority = 0
 shader = ExtResource("1_jmvec")
-shader_parameter/grass_texture_1 = ExtResource("2_yr1wv")
-shader_parameter/grass_texture_2 = ExtResource("2_yr1wv")
-shader_parameter/grass_texture_3 = ExtResource("2_yr1wv")
-shader_parameter/grass_texture_4 = ExtResource("2_yr1wv")
-shader_parameter/grass_texture_5 = ExtResource("2_yr1wv")
-shader_parameter/grass_texture_6 = ExtResource("2_yr1wv")
-shader_parameter/use_grass_tex_2 = true
-shader_parameter/use_grass_tex_3 = true
-shader_parameter/use_grass_tex_4 = true
-shader_parameter/use_grass_tex_5 = true
-shader_parameter/use_grass_tex_6 = true
-shader_parameter/use_base_color_1 = false
-shader_parameter/use_base_color_2 = false
-shader_parameter/use_base_color_3 = false
-shader_parameter/use_base_color_4 = false
-shader_parameter/use_base_color_5 = false
-shader_parameter/use_base_color_6 = false
 shader_parameter/animate_active = true
 shader_parameter/fps = 0.0
 shader_parameter/wind_texture = ExtResource("3_1bgk7")

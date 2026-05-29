@@ -112,6 +112,16 @@ func _ensure_terrain_arrays(terrain: Object) -> bool:
 		# Default any missing 'active' to true (older saves won't have it).
 		if slots_var[i] != null and slots_var[i].get("active") == null:
 			slots_var[i].active = true
+		# Default slot->base-texture mapping for older slot resources.
+		if slots_var[i] != null and slots_var[i].get("terrain_texture_index") == null:
+			if i == 15:
+				slots_var[i].terrain_texture_index = 15
+			elif i < 15:
+				slots_var[i].terrain_texture_index = i
+			else:
+				slots_var[i].terrain_texture_index = 0
+		elif slots_var[i] != null:
+			slots_var[i].terrain_texture_index = clampi(int(slots_var[i].terrain_texture_index), 0, 15)
 		# Default grass fields for older slot resources.
 		if slots_var[i] != null and slots_var[i].get("has_grass") == null:
 			slots_var[i].has_grass = (i == 0)
@@ -164,6 +174,32 @@ func _ensure_terrain_arrays(terrain: Object) -> bool:
 			if slot_outline_widths[i] == null:
 				slot_outline_widths[i] = default_w
 			slot_outline_widths[i] = clampf(float(slot_outline_widths[i]), 0.25, 32.0)
+	
+	var slot_wet_enabled := terrain.get("slot_wet_enabled")
+	if slot_wet_enabled is Array:
+		if slot_wet_enabled.size() != MAX_TEXTURE_SLOTS:
+			slot_wet_enabled.resize(MAX_TEXTURE_SLOTS)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_wet_enabled[i] == null:
+				slot_wet_enabled[i] = false
+
+	var slot_wet_modes := terrain.get("slot_wet_modes")
+	if slot_wet_modes is Array:
+		if slot_wet_modes.size() != MAX_TEXTURE_SLOTS:
+			slot_wet_modes.resize(MAX_TEXTURE_SLOTS)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_wet_modes[i] == null:
+				slot_wet_modes[i] = 0
+			slot_wet_modes[i] = clampi(int(slot_wet_modes[i]), 0, 1)
+
+	var slot_roughnesses := terrain.get("slot_roughnesses")
+	if slot_roughnesses is Array:
+		if slot_roughnesses.size() != MAX_TEXTURE_SLOTS:
+			slot_roughnesses.resize(MAX_TEXTURE_SLOTS)
+		for i in range(MAX_TEXTURE_SLOTS):
+			if slot_roughnesses[i] == null:
+				slot_roughnesses[i] = 1.0
+			slot_roughnesses[i] = clampf(float(slot_roughnesses[i]), 0.0, 1.0)
 	
 	return true
 
@@ -261,6 +297,7 @@ func add_texture_settings() -> void:
 			terrain.texture_slots[p_idx].active = false
 			terrain.texture_slots[p_idx].texture = null
 			terrain.texture_slots[p_idx].scale = 1.0
+			terrain.texture_slots[p_idx].terrain_texture_index = (p_idx if p_idx < 15 else 0)
 			
 			# Reset per-slot palette/outline settings too (so the slot truly clears).
 			if p_idx >= 0 and p_idx < terrain.slot_color_indices.size():
@@ -274,6 +311,12 @@ func add_texture_settings() -> void:
 			if p_idx >= 0 and p_idx < terrain.slot_outline_widths.size():
 				var ow := terrain.get("outline_width")
 				terrain.slot_outline_widths[p_idx] = float(ow) if (ow is float or ow is int) else 6.0
+			if terrain.get("slot_wet_enabled") is Array and p_idx >= 0 and p_idx < terrain.slot_wet_enabled.size():
+				terrain.slot_wet_enabled[p_idx] = false
+			if terrain.get("slot_wet_modes") is Array and p_idx >= 0 and p_idx < terrain.slot_wet_modes.size():
+				terrain.slot_wet_modes[p_idx] = 0
+			if terrain.get("slot_roughnesses") is Array and p_idx >= 0 and p_idx < terrain.slot_roughnesses.size():
+				terrain.slot_roughnesses[p_idx] = 1.0
 			
 			# Keep legacy properties in sync for slots 1..15 so presets save correctly.
 			if p_idx >= 0 and p_idx < 15:
@@ -283,7 +326,7 @@ func add_texture_settings() -> void:
 				if p_idx >= 1 and p_idx <= 5:
 					terrain.set("tex%d_has_grass" % (p_idx + 1), false)
 			else:
-				terrain.rebuild_texture_array()
+				# Non-base slots do not require rebuilding the terrain Texture2DArray anymore.
 				terrain._push_tex_scales()
 			
 			# Push palette lookup textures to materials.
@@ -316,7 +359,8 @@ func add_texture_settings() -> void:
 			var void_tex_label := Label.new()
 			void_tex_label.text = "(Void texture is reserved)"
 			vbox.add_child(void_tex_label, true)
-		else:
+		elif slot_idx < 15:
+			# Base textures 1..15 are edited here.
 			var editor_r_picker := EditorResourcePicker.new()
 			editor_r_picker.set_base_type("Texture2D")
 			editor_r_picker.edited_resource = tex_var
@@ -328,18 +372,48 @@ func add_texture_settings() -> void:
 				if terrain.texture_slots[p_idx] == null:
 					terrain.texture_slots[p_idx] = MarchingSquaresTextureSlot.new()
 				terrain.texture_slots[p_idx].texture = resource
+				# Keep base mapping identity.
+				terrain.texture_slots[p_idx].terrain_texture_index = p_idx
 				
 				# Keep legacy properties in sync for slots 1..15 so presets save correctly.
-				if p_idx >= 0 and p_idx < 15:
-					terrain.set("texture_%d" % (p_idx + 1), resource)
-				else:
-					terrain.rebuild_texture_array()
+				terrain.set("texture_%d" % (p_idx + 1), resource)
+				
+				terrain.rebuild_texture_array()
 				
 				if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
 					terrain.save_to_preset()
 			)
 			editor_r_picker.set_custom_minimum_size(Vector2(100, 25))
 			vbox.add_child(editor_r_picker, true)
+		else:
+			# For slots 16..255, select which base terrain texture to sample.
+			var map_hbox := HBoxContainer.new()
+			map_hbox.set_custom_minimum_size(Vector2(150, 20))
+			var map_label := Label.new()
+			map_label.text = "Terrain Texture:"
+			map_label.set_custom_minimum_size(Vector2(95, 20))
+			map_hbox.add_child(map_label)
+			var map_opt := OptionButton.new()
+			map_opt.set_custom_minimum_size(Vector2(140, 25))
+			for ti in range(15):
+				var nm := (names[ti] if names.size() > ti else ("Texture %d" % (ti + 1)))
+				map_opt.add_item("%d: %s" % [ti + 1, nm], ti)
+			map_opt.add_item("VOID", 15)
+			var cur_idx := int(slot.terrain_texture_index) if slot != null and slot.get("terrain_texture_index") != null else 0
+			map_opt.select(map_opt.get_item_index(clampi(cur_idx, 0, 15)))
+			map_opt.item_selected.connect(func(id, p_idx := slot_idx):
+				if not _ensure_terrain_arrays(terrain):
+					return
+				if terrain.texture_slots[p_idx] == null:
+					terrain.texture_slots[p_idx] = MarchingSquaresTextureSlot.new()
+				terrain.texture_slots[p_idx].terrain_texture_index = clampi(int(id), 0, 15)
+				# Update shader lookup textures.
+				terrain._rebuild_palette_uniforms()
+				if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+					terrain.save_to_preset()
+			)
+			map_hbox.add_child(map_opt, true)
+			vbox.add_child(map_hbox, true)
 		
 		# Grass settings are built next to outline settings in _build_palette_ui() for each slot.
 		
@@ -650,6 +724,82 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 
 		if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
 			terrain.save_to_preset()
+	)
+
+	# Wetness (per slot)
+	var wet_cb := CheckBox.new()
+	wet_cb.text = "Wetness"
+	wet_cb.set_flat(true)
+	wet_cb.button_pressed = bool(terrain.slot_wet_enabled[slot]) if (terrain.get("slot_wet_enabled") is Array and slot >= 0 and slot < terrain.slot_wet_enabled.size()) else false
+	wet_cb.set_custom_minimum_size(Vector2(25, 15))
+	var wet_center := CenterContainer.new()
+	wet_center.set_custom_minimum_size(Vector2(25, 25))
+	wet_center.add_child(wet_cb, true)
+	vbox.add_child(wet_center, true)
+
+	var wet_mode_hbox := HBoxContainer.new()
+	wet_mode_hbox.set_custom_minimum_size(Vector2(150, 20))
+	var wet_mode_label := Label.new()
+	wet_mode_label.text = "Mode:"
+	wet_mode_label.set_custom_minimum_size(Vector2(50, 20))
+	wet_mode_hbox.add_child(wet_mode_label)
+	var wet_mode_opt := OptionButton.new()
+	wet_mode_opt.add_item("Wet", 0)
+	wet_mode_opt.add_item("Glossy Puddles", 1)
+	wet_mode_opt.selected = int(terrain.slot_wet_modes[slot]) if (terrain.get("slot_wet_modes") is Array and slot >= 0 and slot < terrain.slot_wet_modes.size()) else 0
+	wet_mode_opt.set_custom_minimum_size(Vector2(95, 25))
+	wet_mode_hbox.add_child(wet_mode_opt)
+	wet_mode_hbox.visible = wet_cb.button_pressed
+	vbox.add_child(wet_mode_hbox, true)
+
+	var wetness_hbox := HBoxContainer.new()
+	wetness_hbox.set_custom_minimum_size(Vector2(150, 20))
+	var wetness_label := Label.new()
+	wetness_label.text = "Wetness:"
+	wetness_label.set_custom_minimum_size(Vector2(70, 20))
+	wetness_hbox.add_child(wetness_label)
+	var wetness_slider := EditorSpinSlider.new()
+	wetness_slider.set_flat(true)
+	wetness_slider.set_min(0.0)
+	wetness_slider.set_max(1.0)
+	wetness_slider.set_step(0.05)
+	# Stored as roughness: roughness = 1 - wetness.
+	if terrain.get("slot_roughnesses") is Array and slot >= 0 and slot < terrain.slot_roughnesses.size():
+		wetness_slider.set_value(1.0 - float(terrain.slot_roughnesses[slot]))
+	else:
+		wetness_slider.set_value(0.0)
+	wetness_slider.set_custom_minimum_size(Vector2(95, 25))
+	wetness_hbox.add_child(wetness_slider)
+	wetness_hbox.visible = wet_cb.button_pressed
+	vbox.add_child(wetness_hbox, true)
+
+	wet_cb.toggled.connect(func(pressed: bool):
+		if not _ensure_terrain_arrays(terrain):
+			return
+		if terrain.get("slot_wet_enabled") is Array and slot >= 0 and slot < terrain.slot_wet_enabled.size():
+			terrain.slot_wet_enabled[slot] = pressed
+		wet_mode_hbox.visible = pressed
+		wetness_hbox.visible = pressed
+		terrain._rebuild_palette_uniforms()
+		terrain.save_to_preset()
+	)
+
+	wet_mode_opt.item_selected.connect(func(idx: int):
+		if not _ensure_terrain_arrays(terrain):
+			return
+		if terrain.get("slot_wet_modes") is Array and slot >= 0 and slot < terrain.slot_wet_modes.size():
+			terrain.slot_wet_modes[slot] = idx
+		terrain._rebuild_palette_uniforms()
+		terrain.save_to_preset()
+	)
+
+	wetness_slider.value_changed.connect(func(value: float):
+		if not _ensure_terrain_arrays(terrain):
+			return
+		if terrain.get("slot_roughnesses") is Array and slot >= 0 and slot < terrain.slot_roughnesses.size():
+			terrain.slot_roughnesses[slot] = clampf(1.0 - float(value), 0.0, 1.0)
+		terrain._rebuild_palette_uniforms()
+		terrain.save_to_preset()
 	)
 
 	# Outline settings

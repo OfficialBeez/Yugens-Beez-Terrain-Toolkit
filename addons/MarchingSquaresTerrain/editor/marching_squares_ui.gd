@@ -351,6 +351,15 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"global_noise_scroll":
 			if p_value is float or p_value is int:
 				terrain.global_noise_scroll = float(p_value)
+		"detail_normal_texture":
+			if p_value is Texture2D or p_value == null:
+				terrain.detail_normal_texture = p_value
+		"detail_normal_scale":
+			if p_value is float:
+				terrain.detail_normal_scale = p_value
+		"detail_normal_strength":
+			if p_value is float:
+				terrain.detail_normal_strength = p_value
 		"wind_mode":
 			if p_value is int:
 				terrain.wind_mode = p_value
@@ -363,6 +372,12 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 		"wind_tip_strength":
 			if p_value is float:
 				terrain.wind_tip_strength = p_value
+
+	# If the current texture preset is acting as a "global preset", keep it in sync with these changes.
+	if terrain != null and terrain.get("current_texture_preset") != null and terrain.current_texture_preset != null:
+		var p = terrain.current_texture_preset
+		if p.get("apply_terrain_settings") != null and bool(p.apply_terrain_settings):
+			terrain.save_to_preset()
 
 
 func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> void:

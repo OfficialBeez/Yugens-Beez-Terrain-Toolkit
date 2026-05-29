@@ -23,9 +23,11 @@ func _redraw():
 	highlightchunk_material = get_plugin().get_material("highlightchunk", self)
 	brush_material = get_plugin().get_material("brush", self)
 	
-	var terrain_system: MarchingSquaresTerrain = get_node_3d()
+	var terrain_system := get_node_3d()
 	terrain_plugin = MarchingSquaresTerrainPlugin.instance
 	if terrain_plugin == null or not is_instance_valid(terrain_plugin):
+		return
+	if terrain_system == null or not is_instance_valid(terrain_system):
 		return
 	
 	# Only draw the gizmo if this is the only selected node
@@ -34,24 +36,38 @@ func _redraw():
 	if EditorInterface.get_selection().get_selected_nodes()[0] != terrain_system:
 		return
 	
+	var chunks_var := terrain_system.get("chunks")
+	if not (chunks_var is Dictionary):
+		# Script reload/order edge-case: selected node can be a plain Node3D.
+		return
+	var chunks: Dictionary = chunks_var
+	
+	# If these aren't present, the script isn't ready (avoid editor crashes).
+	var dims_v = terrain_system.get("dimensions")
+	var cell_size_v = terrain_system.get("cell_size")
+	if not (dims_v is Vector3i) or not (cell_size_v is Vector2):
+		return
+	var dims: Vector3i = dims_v
+	var cell_size: Vector2 = cell_size_v
+	
 	# Selected chunk gizmo lines
 	if terrain_plugin.mode == terrain_plugin.TerrainToolMode.CHUNK_MANAGEMENT and is_instance_valid(terrain_plugin.selected_chunk) and is_instance_valid(terrain_plugin.current_terrain_node):
 		if terrain_plugin.current_terrain_node.find_child("Chunk " + str(terrain_plugin.selected_chunk.chunk_coords)):
-			add_chunk_lines(terrain_system, terrain_plugin.selected_chunk.chunk_coords, highlightchunk_material)
+			add_chunk_lines(terrain_system, chunks, terrain_plugin.selected_chunk.chunk_coords, highlightchunk_material)
 		else:
 			lines.clear()
 	
 	# Chunk management gizmo lines
-	if terrain_system.chunks.is_empty():
+	if chunks.is_empty():
 		if terrain_plugin.is_chunk_plane_hovered:
-			add_chunk_lines(terrain_system, terrain_plugin.current_hovered_chunk, addchunk_material)
+			add_chunk_lines(terrain_system, chunks, terrain_plugin.current_hovered_chunk, addchunk_material)
 	else:
-		for chunk_coords: Vector2i in terrain_system.chunks:
-			try_add_chunk(terrain_system, Vector2i(chunk_coords.x-1, chunk_coords.y))
-			try_add_chunk(terrain_system, Vector2i(chunk_coords.x+1, chunk_coords.y))
-			try_add_chunk(terrain_system, Vector2i(chunk_coords.x, chunk_coords.y-1))
-			try_add_chunk(terrain_system, Vector2i(chunk_coords.x, chunk_coords.y+1))
-			try_add_chunk(terrain_system, chunk_coords)
+		for chunk_coords: Vector2i in chunks:
+			try_add_chunk(terrain_system, chunks, Vector2i(chunk_coords.x-1, chunk_coords.y))
+			try_add_chunk(terrain_system, chunks, Vector2i(chunk_coords.x+1, chunk_coords.y))
+			try_add_chunk(terrain_system, chunks, Vector2i(chunk_coords.x, chunk_coords.y-1))
+			try_add_chunk(terrain_system, chunks, Vector2i(chunk_coords.x, chunk_coords.y+1))
+			try_add_chunk(terrain_system, chunks, chunk_coords)
 	
 	var pos : Vector3 = terrain_plugin.brush_position
 	var cursor_chunk_coords : Vector2i
@@ -60,12 +76,12 @@ func _redraw():
 	if terrain_plugin.is_setting and not terrain_plugin.draw_height_set:
 		terrain_plugin.draw_height_set = true
 		
-		var chunk_x := floor(pos.x / ((terrain_system.dimensions.x - 1) * terrain_system.cell_size.x))
-		var chunk_z := floor(pos.z / ((terrain_system.dimensions.z - 1) * terrain_system.cell_size.y))
+		var chunk_x: int = int(floor(pos.x / (float(dims.x - 1) * cell_size.x)))
+		var chunk_z: int = int(floor(pos.z / (float(dims.z - 1) * cell_size.y)))
 		cursor_chunk_coords = Vector2i(chunk_x, chunk_z)
 		
-		var x := int(floor(((pos.x + terrain_system.cell_size.x/2) / terrain_system.cell_size.x) - chunk_x * (terrain_system.dimensions.x - 1)))
-		var z := int(floor(((pos.z + terrain_system.cell_size.y/2) / terrain_system.cell_size.y) - chunk_z * (terrain_system.dimensions.z - 1)))
+		var x: int = int(floor(((pos.x + cell_size.x/2.0) / cell_size.x) - float(chunk_x) * float(dims.x - 1)))
+		var z: int = int(floor(((pos.z + cell_size.y/2.0) / cell_size.y) - float(chunk_z) * float(dims.z - 1)))
 		cursor_cell_coords = Vector2i(x, z)
 		
 		# When setting, if there is no pattern and alt not held, go to draw mode
@@ -79,10 +95,10 @@ func _redraw():
 		# Otherwise, drag that pattern's height
 		else:
 			# If alt held, ONLY drag the cursor cell
-			if Input.is_key_pressed(KEY_ALT) and terrain_system.chunks.has(cursor_chunk_coords):
+			if Input.is_key_pressed(KEY_ALT) and chunks.has(cursor_chunk_coords):
 				terrain_plugin.current_draw_pattern.clear()
 				terrain_plugin.current_draw_pattern[cursor_chunk_coords] = {}
-				terrain_plugin.current_draw_pattern[cursor_chunk_coords][cursor_cell_coords] = terrain_system.chunks[cursor_chunk_coords].get_height(cursor_cell_coords)
+				terrain_plugin.current_draw_pattern[cursor_chunk_coords][cursor_cell_coords] = chunks[cursor_chunk_coords].get_height(cursor_cell_coords)
 				terrain_plugin.draw_height = pos.y
 			terrain_plugin.base_position = pos
 	
@@ -97,7 +113,7 @@ func _redraw():
 	
 	# Set the BRUSH_VISUAL's size dynamically
 	if terrain_plugin.BRUSH_VISUAL != null and (terrain_plugin.BRUSH_VISUAL is PlaneMesh or terrain_plugin.BRUSH_VISUAL is QuadMesh):
-		terrain_plugin.BRUSH_VISUAL.size = Vector2(1.0, 1.0) * (terrain_system.cell_size.x + terrain_system.cell_size.y) / 4.0
+		terrain_plugin.BRUSH_VISUAL.size = Vector2(1.0, 1.0) * (cell_size.x + cell_size.y) / 4.0
 	
 	if terrain_chunk_hovered:
 		# Brush radius visualization
@@ -147,9 +163,9 @@ func _redraw():
 		for chunk_z in range(bounds.chunk_tl.y, bounds.chunk_br.y + 1):
 			for chunk_x in range(bounds.chunk_tl.x, bounds.chunk_br.x + 1):
 				cursor_chunk_coords = Vector2i(chunk_x, chunk_z)
-				if not terrain_system.chunks.has(cursor_chunk_coords):
+				if not chunks.has(cursor_chunk_coords):
 					continue
-				var chunk : MarchingSquaresTerrainChunk = terrain_system.chunks[cursor_chunk_coords]
+				var chunk : MarchingSquaresTerrainChunk = chunks[cursor_chunk_coords]
 				
 				var cell_range : Dictionary = BrushPatternCalculator.get_cell_range_for_chunk(cursor_chunk_coords, bounds, terrain_system)
 				
@@ -199,11 +215,11 @@ func _redraw():
 	
 	if not terrain_plugin.current_draw_pattern.is_empty():
 		for draw_chunk_coords : Vector2i in terrain_plugin.current_draw_pattern:
-			var chunk = terrain_system.chunks[draw_chunk_coords]
+			var chunk = chunks[draw_chunk_coords]
 			var draw_chunk_dict : Dictionary = terrain_plugin.current_draw_pattern[draw_chunk_coords]
 			for draw_coords: Vector2i in draw_chunk_dict:
-				var draw_x := (draw_chunk_coords.x * (terrain_system.dimensions.x - 1) + draw_coords.x) * terrain_system.cell_size.x
-				var draw_z := (draw_chunk_coords.y * (terrain_system.dimensions.z - 1) + draw_coords.y) * terrain_system.cell_size.y
+				var draw_x: float = (float(draw_chunk_coords.x) * float(dims.x - 1) + float(draw_coords.x)) * cell_size.x
+				var draw_z: float = (float(draw_chunk_coords.y) * float(dims.z - 1) + float(draw_coords.y)) * cell_size.y
 				var draw_y := terrain_plugin.draw_height if terrain_plugin.flatten else 0.0
 				if not terrain_plugin.flatten:
 					var dz := draw_coords.y
@@ -242,41 +258,48 @@ func _create_brush_basis(normal: Vector3, brush_size: float) -> Basis:
 	return Basis(tangent, n, bitangent)
 
 
-func try_add_chunk(terrain_system: MarchingSquaresTerrain, coords: Vector2i):
+func try_add_chunk(terrain_system, chunks: Dictionary, coords: Vector2i):
 	var terrain_plugin := MarchingSquaresTerrainPlugin.instance
 	
 	if Input.is_key_pressed(KEY_CTRL):
 		return
 	
 	# Add chunk
-	if (terrain_plugin.mode == terrain_plugin.TerrainToolMode.CHUNK_MANAGEMENT or Input.is_key_pressed(KEY_SHIFT)) and not terrain_system.chunks.has(coords) and terrain_plugin.is_chunk_plane_hovered and terrain_plugin.current_hovered_chunk == coords:
-		add_chunk_lines(terrain_system, coords, addchunk_material)
+	if (terrain_plugin.mode == terrain_plugin.TerrainToolMode.CHUNK_MANAGEMENT or Input.is_key_pressed(KEY_SHIFT)) and not chunks.has(coords) and terrain_plugin.is_chunk_plane_hovered and terrain_plugin.current_hovered_chunk == coords:
+		add_chunk_lines(terrain_system, chunks, coords, addchunk_material)
 	
 	# Remove chunk (Manage Chunk tool only)
 	elif terrain_plugin.mode == terrain_plugin.TerrainToolMode.CHUNK_MANAGEMENT and terrain_plugin.is_chunk_plane_hovered and terrain_plugin.current_hovered_chunk == coords:
-		add_chunk_lines(terrain_system, coords, removechunk_material) 
+		add_chunk_lines(terrain_system, chunks, coords, removechunk_material) 
 
 
 # Draw chunk ui lines inside and around a chunk
-func add_chunk_lines(terrain_system: MarchingSquaresTerrain, coords: Vector2i, material: Material):
-	var dx := (terrain_system.dimensions.x - 1) * terrain_system.cell_size.x
-	var dz := (terrain_system.dimensions.z - 1) * terrain_system.cell_size.y
-	var x := coords.x * dx
-	var z := coords.y * dz
+func add_chunk_lines(terrain_system, chunks: Dictionary, coords: Vector2i, material: Material):
+	var dims_v = terrain_system.get("dimensions")
+	var cell_size_v = terrain_system.get("cell_size")
+	if not (dims_v is Vector3i) or not (cell_size_v is Vector2):
+		return
+	var dims: Vector3i = dims_v
+	var cell_size: Vector2 = cell_size_v
+	
+	var dx: float = float(dims.x - 1) * cell_size.x
+	var dz: float = float(dims.z - 1) * cell_size.y
+	var x: float = float(coords.x) * dx
+	var z: float = float(coords.y) * dz
 	dx += x
 	dz += z
 	
 	lines.clear()
-	if not terrain_system.chunks.has(Vector2i(coords.x, coords.y-1)):
+	if not chunks.has(Vector2i(coords.x, coords.y-1)):
 		lines.append(Vector3(x,0,z))
 		lines.append(Vector3(dx,0,z))
-	if not terrain_system.chunks.has(Vector2i(coords.x+1, coords.y)):
+	if not chunks.has(Vector2i(coords.x+1, coords.y)):
 		lines.append(Vector3(dx,0,z))
 		lines.append(Vector3(dx,0,dz))
-	if not terrain_system.chunks.has(Vector2i(coords.x, coords.y+1)):
+	if not chunks.has(Vector2i(coords.x, coords.y+1)):
 		lines.append(Vector3(dx,0,dz))
 		lines.append(Vector3(x,0,dz))
-	if not terrain_system.chunks.has(Vector2i(coords.x-1, coords.y)):
+	if not chunks.has(Vector2i(coords.x-1, coords.y)):
 		lines.append(Vector3(x,0,dz))
 		lines.append(Vector3(x,0,z))
 	

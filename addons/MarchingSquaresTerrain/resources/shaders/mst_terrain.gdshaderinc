@@ -12,10 +12,12 @@ group_uniforms Visuals.Palette;
 // - palette_weights_tex: 8 x 256, R in [0..1].    x=color idx (0..7), y=slot (0..255)
 // - palette_meta_tex:    1 x 256, RGBA8 encoded:  r=count(0..8), g=blend_mode(0..3),
 //                          b=has_outline(0/1), a=outline_mode(0/1), each stored as 0..255
+// - slot_tex_index_tex:  1 x 256, R8 encoded:    r=base_texture_index(0..15) stored as 0..255
 uniform sampler2D palette_colors_tex : filter_nearest;
 uniform sampler2D palette_weights_tex : filter_nearest;
 uniform sampler2D palette_meta_tex : filter_nearest;
-// Per-slot outline widths (stored as raw width values in .r).
+uniform sampler2D slot_tex_index_tex : filter_nearest;
+// Per-slot outline widths + roughness (width in .r, roughness in .g).
 uniform sampler2D palette_outline_width_tex : filter_nearest;
 
 // Legacy global outline width (kept for backwards-compat / inspector-only tweaking).
@@ -41,6 +43,11 @@ group_uniforms;
 
 group_uniforms Visuals.Normals;
 uniform bool use_flat_normals = false;
+
+// Detail height/noise texture used to derive a small normal perturbation.
+uniform sampler2D detail_normal_texture : hint_default_white, repeat_enable, filter_linear;
+uniform float detail_normal_scale : hint_range(0.001, 5.0, 0.001) = 0.25;
+uniform float detail_normal_strength : hint_range(0.0, 1.0, 0.01) = 0.0;
 group_uniforms;
 
 group_uniforms Effects.Ridge_Ledge_Texture;
@@ -67,6 +74,14 @@ uniform bool use_cell_shading = true;
 uniform vec4 shadow_color : source_color;
 uniform int bands : hint_range(1, 10) = 5;
 uniform float shadow_intensity : hint_range(-1.0, 0.5, 0.05) = 0.00;
+// Adds a simple toon-friendly specular highlight so ROUGHNESS has a visible effect.
+uniform float specular_strength : hint_range(0.0, 2.0, 0.01) = 0.5;
+uniform float specular_threshold : hint_range(0.0, 1.0, 0.01) = 0.7;
+
+// Wetness mode controls (used when slot wetness is enabled)
+uniform float wet_puddle_noise_scale : hint_range(0.01, 2.0, 0.01) = 0.25;
+uniform float wet_puddle_threshold : hint_range(0.0, 1.0, 0.01) = 0.55;
+
 group_uniforms;
 
 
@@ -110,6 +125,16 @@ float cheap_noise(vec2 p) {
 		noise(p + vec2(1.7, 9.2)),
 		noise(p + vec2(8.3, 2.8)));
 	return noise(p + warp * 0.4) * 0.6 + noise(p * 2.1 + vec2(5.2, 1.3)) * 0.4;
+}
+
+vec3 _mst_detail_height_to_ts(vec2 uv, float strength) {
+	// Use a tiny finite difference to approximate a normal from height.
+	float e = 0.002;
+	float h = texture(detail_normal_texture, uv).r;
+	float hx = texture(detail_normal_texture, uv + vec2(e, 0.0)).r;
+	float hy = texture(detail_normal_texture, uv + vec2(0.0, e)).r;
+	vec2 g = vec2(hx - h, hy - h);
+	return normalize(vec3(-g.x * strength, -g.y * strength, 1.0));
 }
 
 float fbm_octaves(vec2 p, int octaves) {
@@ -249,6 +274,24 @@ float _palette_outline_width(int slot) {
 	return max(texture(palette_outline_width_tex, vec2(0.5, v)).r, 0.25);
 }
 
+float _palette_roughness(int slot) {
+	slot = clamp(slot, 0, 255);
+	float v = (float(slot) + 0.5) / 256.0;
+	return clamp(texture(palette_outline_width_tex, vec2(0.5, v)).g, 0.0, 1.0);
+}
+
+float _palette_wet_enabled(int slot) {
+	slot = clamp(slot, 0, 255);
+	float v = (float(slot) + 0.5) / 256.0;
+	return texture(palette_outline_width_tex, vec2(0.5, v)).b;
+}
+
+int _palette_wet_mode(int slot) {
+	slot = clamp(slot, 0, 255);
+	float v = (float(slot) + 0.5) / 256.0;
+	return int(round(clamp(texture(palette_outline_width_tex, vec2(0.5, v)).a, 0.0, 1.0)));
+}
+
 vec4 sample_palette_entry(int slot, int color_idx) {
 	slot = clamp(slot, 0, 255);
 	int idx = clamp(color_idx, 0, 7);
@@ -371,9 +414,18 @@ vec4 get_outline_palette_color(int slot) {
 	return c;
 }
 
-vec4 sample_texture_layer(int index, vec2 uv) {
-	index = clamp(index, 0, 255);
-	return texture(vc_tex_array, vec3(uv, float(index)));
+int _slot_base_texture_index(int slot) {
+	slot = clamp(slot, 0, 255);
+	float v = (float(slot) + 0.5) / 256.0;
+	return int(round(texture(slot_tex_index_tex, vec2(0.5, v)).r * 255.0));
+}
+
+vec4 sample_texture_layer(int slot, vec2 uv) {
+	slot = clamp(slot, 0, 255);
+	// Keep legacy VOID slot behavior (slot 15 always samples layer 15).
+	if (slot == 15) return texture(vc_tex_array, vec3(uv, 15.0));
+	int base_idx = clamp(_slot_base_texture_index(slot), 0, 15);
+	return texture(vc_tex_array, vec3(uv, float(base_idx)));
 }
 
 vec4 sample_material_by_index_tint(int index, vec2 base_uv, vec4 tint) {
@@ -515,15 +567,24 @@ void fragment() {
 	int edge_mat_b = -1;
 	float edge_weight_a = 0.0;
 	float edge_weight_b = 0.0;
+	float out_roughness = 1.0;
+	float out_wet_enabled = 0.0;
+	int out_wet_mode = 0;
 
 	if (is_floor) {
 		floor_uv = UV2 * tiling_factor_floor;
 
 		if (use_hard_textures) {
-			if (blend_mode == 2)
+			if (blend_mode == 2) {
+				out_roughness = _palette_roughness(material_index);
+				out_wet_enabled = _palette_wet_enabled(material_index);
+				out_wet_mode = _palette_wet_mode(material_index);
 				floor_color = sample_material_by_index(material_index, floor_uv);
-			else {
+			} else {
 				int cell_dominant_mat = int(round(mat_indices.x));
+				out_roughness = _palette_roughness(cell_dominant_mat);
+				out_wet_enabled = _palette_wet_enabled(cell_dominant_mat);
+				out_wet_mode = _palette_wet_mode(cell_dominant_mat);
 				floor_color = sample_material_by_index(cell_dominant_mat, floor_uv);
 			}
 		}
@@ -588,6 +649,11 @@ void fragment() {
 			floor_color = sample_material_by_index(mat_a, floor_uv) * weight_a
 						+ sample_material_by_index(mat_b, floor_uv) * weight_b
 						+ sample_material_by_index(mat_c, floor_uv) * weight_c;
+			out_roughness = _palette_roughness(mat_a) * weight_a
+						+ _palette_roughness(mat_b) * weight_b
+						+ _palette_roughness(mat_c) * weight_c;
+			out_wet_enabled = _palette_wet_enabled(top1_idx);
+			out_wet_mode = _palette_wet_mode(top1_idx);
 		}
 
 		ALBEDO = floor_color.rgb;
@@ -631,6 +697,16 @@ void fragment() {
 			if (total > 0.001) { weight_a /= total; weight_b /= total; weight_c /= total; }
 		}
 
+		out_roughness = _palette_roughness(mat_a) * weight_a
+					+ _palette_roughness(mat_b) * weight_b
+					+ _palette_roughness(mat_c) * weight_c;
+		int dom_mat = mat_a;
+		float dom_w = weight_a;
+		if (weight_b > dom_w) { dom_w = weight_b; dom_mat = mat_b; }
+		if (weight_c > dom_w) { dom_w = weight_c; dom_mat = mat_c; }
+		out_wet_enabled = _palette_wet_enabled(dom_mat);
+		out_wet_mode = _palette_wet_mode(dom_mat);
+
 		vec4 wall_mat_x = sample_material_by_index(mat_a, uv_x) * weight_a
 						+ sample_material_by_index(mat_b, uv_x) * weight_b
 						+ sample_material_by_index(mat_c, uv_x) * weight_c;
@@ -654,6 +730,11 @@ void fragment() {
 		vec3 rl_x = sample_material_by_index(int(nearest_wall_color_idx), UV2 * tiling_factor_wall).rgb * tri_weights.x;
 		vec3 rl_z = sample_material_by_index(int(nearest_wall_color_idx), UV2 * tiling_factor_wall).rgb * tri_weights.z;
 		ALBEDO = mix(floor_color.rgb, rl_x + rl_z, mixed_blend_factor);
+		out_roughness = mix(out_roughness, _palette_roughness(int(nearest_wall_color_idx)), mixed_blend_factor);
+		if (mixed_blend_factor > 0.5) {
+			out_wet_enabled = _palette_wet_enabled(int(nearest_wall_color_idx));
+			out_wet_mode = _palette_wet_mode(int(nearest_wall_color_idx));
+		}
 	}
 	else if (use_ridge_texture && custom1.g > 0.5 && is_floor) {
 		mixed_blend_factor = ridge_blend_factor.x;
@@ -664,6 +745,11 @@ void fragment() {
 		vec3 rl_x = sample_material_by_index(int(nearest_wall_color_idx), UV2 * tiling_factor_wall).rgb * tri_weights.x;
 		vec3 rl_z = sample_material_by_index(int(nearest_wall_color_idx), UV2 * tiling_factor_wall).rgb * tri_weights.z;
 		ALBEDO = mix(floor_color.rgb, rl_x + rl_z, mixed_blend_factor);
+		out_roughness = mix(out_roughness, _palette_roughness(int(nearest_wall_color_idx)), mixed_blend_factor);
+		if (mixed_blend_factor > 0.5) {
+			out_wet_enabled = _palette_wet_enabled(int(nearest_wall_color_idx));
+			out_wet_mode = _palette_wet_mode(int(nearest_wall_color_idx));
+		}
 	}
 
 
@@ -706,18 +792,120 @@ void fragment() {
 			scroll = dir * TIME * wind_speed * 3.0 * global_noise_scroll;
 		}
 
-		vec2 uv = (vec2(world_pos.x, world_pos.z) + scroll) * global_noise_scale;
-		uv = fract(uv);
+		// Floors: XZ projection. Walls: use ZY or XY (blended by wall orientation) to avoid streaking.
+		vec2 uv_floor = fract((world_pos.xz + scroll) * global_noise_scale);
+		vec2 uv_x = fract((vec2(world_pos.z + scroll.y, world_pos.y)) * global_noise_scale);
+		vec2 uv_z = fract((vec2(world_pos.x + scroll.x, world_pos.y)) * global_noise_scale);
 
-		float gn = texture(global_noise_texture, uv).r;
+		float gn_floor = texture(global_noise_texture, uv_floor).r;
+		float gn_wall = texture(global_noise_texture, uv_x).r * tri_weights.x + texture(global_noise_texture, uv_z).r * tri_weights.z;
+		float gn = is_floor ? gn_floor : gn_wall;
+
 		float mult = mix(1.0 - global_noise_strength, 1.0, clamp(gn, 0.0, 1.0));
 		ALBEDO *= mult;
 	}
 
+	// Wetness modes (per-slot). Uses slot roughness as the "wet" roughness target.
+	float final_roughness = out_roughness;
+	float wet_mask = 0.0;
+	if (is_floor && out_wet_enabled > 0.5) {
+		// Wetness is controlled by the wet toggle/mode; roughness is the *target* roughness when wet.
+		float wet_amount = 1.0;
+
+		// Use the detail noise (default white) as a consistent wetness breakup source.
+		// NOTE: This is separate from the global noise tinting; it makes Wet/Puddles look less uniform.
+		vec2 wet_uv = fract(world_pos.xz * wet_puddle_noise_scale);
+		float wet_detail = texture(detail_normal_texture, wet_uv).r;
+		float wet_variation = mix(0.55, 1.0, wet_detail);
+
+		if (out_wet_mode == 0) {
+			// Wet: darkening with variation (no puddle pooling).
+			wet_mask = wet_amount * wet_variation;
+		} else {
+			// Glossy puddles: drive placement from detail_normal_texture (so changing the noise changes puddles),
+			// with a procedural fallback when the texture is effectively flat/white.
+			vec2 uv0 = fract(world_pos.xz * wet_puddle_noise_scale * 2.5);
+			vec2 uv1 = fract(world_pos.xz * wet_puddle_noise_scale * 6.0);
+
+			float t0a = texture(detail_normal_texture, uv0).r;
+			float t1a = texture(detail_normal_texture, uv1).r;
+
+			// Detect default/flat texture (typically hint_default_white) and fall back to procedural noise.
+			float t0b = texture(detail_normal_texture, uv0 + vec2(0.37, 0.19)).r;
+			float tflat = (1.0 - step(0.0005, abs(t0a - t0b))) * step(0.98, t0a);
+
+			float p0 = cheap_noise(world_pos.xz * wet_puddle_noise_scale * 2.5);
+			float p1 = cheap_noise(world_pos.xz * wet_puddle_noise_scale * 6.0);
+
+			float n_tex = clamp((t0a * 0.7 + t1a * 0.3) * wet_variation, 0.0, 1.0);
+			float n_proc = clamp((p0 * 0.7 + p1 * 0.3) * wet_variation, 0.0, 1.0);
+			float n = mix(n_tex, n_proc, tflat);
+
+			// Invert mask: pick "valleys" of the noise as puddles (often nicer shapes).
+			n = 1.0 - n;
+
+			// Softer threshold = more/smoother puddles.
+			float t0 = wet_puddle_threshold - 0.18;
+			float t1 = wet_puddle_threshold + 0.10;
+			float puddle = smoothstep(t0, t1, n);
+			wet_mask = wet_amount * puddle;
+		}
+
+		// Make it read more strongly in a stylized/pixel-art palette.
+		float darken = (out_wet_mode == 1) ? 0.22 : 0.14;
+		ALBEDO *= (1.0 - darken * clamp(wet_mask, 0.0, 1.0));
+
+		// Make puddles reliably glossy (helps the effect read in toon/pixel art).
+		float wet_target_roughness = (out_wet_mode == 1) ? min(out_roughness, 0.03) : out_roughness;
+		final_roughness = mix(1.0, wet_target_roughness, clamp(wet_mask, 0.0, 1.0));
+	} else if (is_floor) {
+		// Toggle off: keep floors dry/matte.
+		final_roughness = 1.0;
+	}
+
+	ROUGHNESS = clamp(final_roughness, 0.0, 1.0);
 }
 
 void light() {
-	float NdotL = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
+	vec3 N = NORMAL;
+
+	// Optional detail normal to break up lighting on flat surfaces.
+	if (detail_normal_strength > 0.001) {
+		// Treat wall vertices explicitly via UV sentinel (walls use UV=(2,2)).
+		bool is_floor = (UV.x < 1.5) && (dot(vertex_normal, vec3(0.0, 1.0, 0.0)) > wall_threshold);
+
+		vec3 abs_normal = abs(vertex_normal);
+		vec3 tri_weights = vec3(abs_normal.x, 0.0, abs_normal.z);
+		float denom = max(tri_weights.x + tri_weights.z, 0.00001);
+		tri_weights /= denom;
+
+		float dn = clamp(detail_normal_strength, 0.0, 1.0);
+		float dn_bump = dn * 8.0;
+
+		vec2 duv_floor = fract(world_pos.xz * detail_normal_scale);
+		vec2 duv_x = fract(vec2(world_pos.z, world_pos.y) * detail_normal_scale);
+		vec2 duv_z = fract(vec2(world_pos.x, world_pos.y) * detail_normal_scale);
+
+		vec3 nts_floor = _mst_detail_height_to_ts(duv_floor, dn_bump);
+		vec3 nts_x = _mst_detail_height_to_ts(duv_x, dn_bump);
+		vec3 nts_z = _mst_detail_height_to_ts(duv_z, dn_bump);
+
+		float sx = (vertex_normal.x >= 0.0) ? 1.0 : -1.0;
+		float sz = (vertex_normal.z >= 0.0) ? 1.0 : -1.0;
+
+		// Convert from tangent-space normal to a local-space normal for each projection plane.
+		vec3 n_local_floor = normalize(vec3(nts_floor.x, nts_floor.z, nts_floor.y));
+		vec3 n_local_x = normalize(vec3(sx * nts_x.z, nts_x.y, nts_x.x));
+		vec3 n_local_z = normalize(vec3(nts_z.x, nts_z.y, sz * nts_z.z));
+
+		vec3 n_local = is_floor ? n_local_floor : normalize(n_local_x * tri_weights.x + n_local_z * tri_weights.z);
+		// Convert world-space normal to view-space (LIGHT/VIEW/NORMAL are in view-space here).
+		vec3 n_vs = normalize((mat3(VIEW_MATRIX) * n_local));
+
+		N = normalize(mix(NORMAL, n_vs, dn));
+	}
+
+	float NdotL = clamp(dot(N, LIGHT), 0.0, 1.0);
 	float stepped = use_cell_shading ? (ceil(NdotL * float(bands)) / float(bands)) : NdotL;
 
 	// Base toon weight (before attenuation).
@@ -725,8 +913,34 @@ void light() {
 		? mix(shadow_intensity, 0.3, stepped)
 		: (NdotL * 0.3);
 
-	// Edge Highlights are currently implemented in fragment() as a black outline.
-
 	float toon_light = toon_weight * ATTENUATION;
 	DIFFUSE_LIGHT += mix(shadow_color.rgb, LIGHT_COLOR.rgb, toon_light);
+
+	// Specular (needed so ROUGHNESS actually changes the look).
+	// NOTE: On perfectly flat surfaces (no normal variation) spec can look very uniform.
+	float r = clamp(ROUGHNESS, 0.0, 1.0);
+	float gloss = 1.0 - r;
+	// Treat low roughness as "wet" for highlight shaping.
+	float wet = gloss;
+
+	vec3 H = normalize(LIGHT + VIEW);
+	float NdotH = clamp(dot(N, H), 0.0, 1.0);
+	float shininess = mix(256.0, 12.0, r);
+	// Wet/glossy surfaces need a broader highlight to read at low resolutions.
+	shininess = mix(shininess, 32.0, wet);
+	// Don't let spec disappear completely in shadow for puddles (stylized "sheen").
+	float spec = pow(NdotH, shininess) * max(NdotL, 0.25);
+	if (use_cell_shading) {
+		// When wet/glossy, lower the threshold so highlights show up at low resolutions.
+		float th = mix(specular_threshold, 0.08, wet);
+		spec = smoothstep(th, 1.0, spec);
+	}
+	float wet_boost = mix(1.0, 6.0, wet);
+	SPECULAR_LIGHT += LIGHT_COLOR.rgb * (specular_strength * wet_boost * spec * gloss) * ATTENUATION;
+
+	// "Reflection-esque" wet sheen: a view-angle fresnel highlight that reads even on flat pixel-art terrain.
+	float NdotV = clamp(dot(N, VIEW), 0.0, 1.0);
+	float fres = pow(1.0 - NdotV, 4.0);
+	float sheen = wet * gloss * fres;
+	SPECULAR_LIGHT += LIGHT_COLOR.rgb * (0.35 * sheen) * ATTENUATION;
 }

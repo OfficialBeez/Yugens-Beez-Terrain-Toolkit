@@ -39,6 +39,9 @@ var terrain_settings_data : Dictionary = {
 		"ledge_threshold": "EditorSpinSlider",
 		"wall_threshold": "EditorSpinSlider",
 		"use_flat_normals": "CheckBox",
+		"detail_normal_texture": "EditorResourcePicker",
+		"detail_normal_scale": "EditorSpinSlider",
+		"detail_normal_strength": "EditorSpinSlider",
 		"use_cell_shading": "CheckBox",
 		"outline_mode": "OptionButton",
 		"outline_px": "EditorSpinSlider",
@@ -93,8 +96,14 @@ func show_tool_attributes(tool_index: int) -> void:
 	if not plugin.toolbar.toolbox:
 		return
 	
-	if tool_index == 7 and plugin.selected_chunk == null and not plugin.current_terrain_node.chunks.is_empty(): # Chunk management tool
-		plugin.selected_chunk = plugin.current_terrain_node.chunks.values().pick_random()
+	var terrain := plugin.current_terrain_node
+	if terrain == null or not is_instance_valid(terrain):
+		return
+	
+	# Chunk management tool: pick any existing chunk if nothing is selected.
+	var terrain_chunks = terrain.get("chunks")
+	if tool_index == 7 and plugin.selected_chunk == null and terrain_chunks is Dictionary and not terrain_chunks.is_empty():
+		plugin.selected_chunk = terrain_chunks.values().pick_random()
 		selected_chunk = plugin.selected_chunk
 	
 	var tool := plugin.toolbar.toolbox.tools.get(tool_index)
@@ -143,9 +152,10 @@ func show_tool_attributes(tool_index: int) -> void:
 	
 	# Rebuild material names from the preset or fallback to defaults
 	var terrain_names : Array = []
-	if plugin.current_terrain_node and plugin.current_terrain_node.current_texture_preset and plugin.current_terrain_node.current_texture_preset.new_tex_names:
-		MarchingSquaresTerrainPlugin._ensure_texture_names_resource(plugin.current_terrain_node.current_texture_preset.new_tex_names)
-		terrain_names = plugin.current_terrain_node.current_texture_preset.new_tex_names.get("texture_names")
+	var terrain_preset = terrain.get("current_texture_preset")
+	if terrain_preset != null and terrain_preset.get("new_tex_names") != null and terrain_preset.new_tex_names:
+		MarchingSquaresTerrainPlugin._ensure_texture_names_resource(terrain_preset.new_tex_names)
+		terrain_names = terrain_preset.new_tex_names.get("texture_names")
 	else:
 		MarchingSquaresTerrainPlugin._ensure_texture_names_resource(attribute_list.vp_tex_names)
 		terrain_names = attribute_list.vp_tex_names.get("texture_names")  # fallback
@@ -160,7 +170,8 @@ func show_tool_attributes(tool_index: int) -> void:
 	add_child(hbox_container)
 	last_setting_type = SettingType.ERROR # Reset the setting type for correct VSeparators
 	
-	plugin.gizmo_plugin.trigger_redraw(plugin.current_terrain_node)
+	if plugin.gizmo_plugin and terrain:
+		plugin.gizmo_plugin.trigger_redraw(terrain)
 
 
 func add_setting(p_params: Dictionary) -> void:
@@ -206,8 +217,16 @@ func add_setting(p_params: Dictionary) -> void:
 			hbox_container.add_child(cont, true)
 		SettingType.SLIDER:
 			var range_data := p_params.get("range", Vector3(1.0, 50.0, 0.5))
-			var cell_scale_factor := clamp(((plugin.current_terrain_node.cell_size.x + plugin.current_terrain_node.cell_size.y) / 4.0), 0.3, 1.0)
-			var dimensions_scale_factor := clamp((((plugin.current_terrain_node.dimensions.x / 33) + (plugin.current_terrain_node.dimensions.z / 33)) / 2.0), 0.5, 2.0)
+			var t := plugin.current_terrain_node
+			var cell_size := Vector2(2.0, 2.0)
+			var dims := Vector3i(33, 32, 33)
+			if t != null and is_instance_valid(t):
+				if t.get("cell_size") != null:
+					cell_size = t.cell_size
+				if t.get("dimensions") != null:
+					dims = t.dimensions
+			var cell_scale_factor := clamp(((cell_size.x + cell_size.y) / 4.0), 0.3, 1.0)
+			var dimensions_scale_factor := clamp((((float(dims.x) / 33.0) + (float(dims.z) / 33.0)) / 2.0), 0.5, 2.0)
 			var scale_factor : float = dimensions_scale_factor * cell_scale_factor
 			var default_value := p_params.get("default", 10.0) # Fallback base value
 			if setting_name == "size":
@@ -343,6 +362,43 @@ func add_setting(p_params: Dictionary) -> void:
 				cont.set_custom_minimum_size(Vector2(100, 35))
 				cont.add_child(preset_button, true)
 				hbox_container.add_child(cont, true)
+				
+				# Per-preset opt-in: whether this preset also saves/applies global visual terrain settings.
+				var global_cb := CheckBox.new()
+				global_cb.text = "Global"
+				global_cb.set_flat(true)
+				global_cb.tooltip_text = "When enabled, this preset also saves/applies global Terrain Settings (visual): outlines/toon shading/grass wind/noise, etc."
+				
+				var active_preset := plugin.current_texture_preset
+				var can_toggle := active_preset != null and active_preset.get("apply_terrain_settings") != null and not active_preset.resource_path.is_empty()
+				global_cb.disabled = not can_toggle
+				global_cb.button_pressed = can_toggle and bool(active_preset.apply_terrain_settings)
+				
+				global_cb.toggled.connect(func(pressed: bool):
+					var p := plugin.current_texture_preset
+					if p == null or p.resource_path.is_empty() or p.get("apply_terrain_settings") == null:
+						return
+					p.apply_terrain_settings = pressed
+					if pressed:
+						# Default to visual-only (avoid heavy rebuilds).
+						if p.get("apply_chunk_settings") != null:
+							p.apply_chunk_settings = false
+						if p.get("apply_vertex_painter_settings") != null:
+							p.apply_vertex_painter_settings = true
+						if p.get("apply_grass_settings") != null:
+							p.apply_grass_settings = true
+						if plugin.current_terrain_node and plugin.current_terrain_node.has_method("save_to_preset"):
+							plugin.current_terrain_node.save_to_preset()
+						else:
+							ResourceSaver.save(p)
+					else:
+						ResourceSaver.save(p)
+				)
+				
+				cont = CenterContainer.new()
+				cont.set_custom_minimum_size(Vector2(80, 35))
+				cont.add_child(global_cb, true)
+				hbox_container.add_child(cont, true)
 			else: # Can be used for e.g. terrain settings presets in the future
 				pass
 		SettingType.QUICK_PAINT:
@@ -398,12 +454,13 @@ func add_setting(p_params: Dictionary) -> void:
 			cont.add_child(quick_paint_button, true)
 			hbox_container.add_child(cont, true)
 		SettingType.CHUNK:
-			if plugin.current_terrain_node.get_child_count() == 0:
+			var terrain := plugin.current_terrain_node
+			if terrain == null or not is_instance_valid(terrain) or terrain.get_child_count() == 0:
 				return
 			
 			current_available_chunks.clear()
 			
-			var terrain_children : Array = plugin.current_terrain_node.get_children()
+			var terrain_children : Array = terrain.get_children()
 			var chunk_button := OptionButton.new()
 			for child in terrain_children:
 				if child is MarchingSquaresTerrainChunk:
@@ -482,7 +539,10 @@ func add_setting(p_params: Dictionary) -> void:
 
 
 func _make_terrain_setting_row(setting: String, editor_setting: String) -> HBoxContainer:
-	var s_value = plugin.current_terrain_node.get(setting)
+	var terrain := plugin.current_terrain_node
+	var s_value = null
+	if terrain != null and is_instance_valid(terrain):
+		s_value = terrain.get(setting)
 
 	var hbox := HBoxContainer.new()
 	hbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -533,6 +593,14 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 				spin_slider.set_min(0.0)
 				spin_slider.set_max(1.0)
 				spin_slider.set_step(0.01)
+			elif setting == "detail_normal_strength":
+				spin_slider.set_min(0.0)
+				spin_slider.set_max(1.0)
+				spin_slider.set_step(0.01)
+			elif setting == "detail_normal_scale":
+				spin_slider.set_min(0.001)
+				spin_slider.set_max(5.0)
+				spin_slider.set_step(0.001)
 			else:
 				spin_slider.set_min(0.005)
 				spin_slider.set_max(1.0)
@@ -551,13 +619,13 @@ func _make_terrain_setting_editor(setting: String, editor_setting: String, s_val
 			picker.resource_changed.connect(func(resource):
 				_on_terrain_setting_changed(setting, resource)
 				# Let users actually edit the resource (NoiseTexture2D etc.) in the Inspector.
-				if setting == "global_noise_texture" and resource != null:
+				if (setting == "global_noise_texture" or setting == "detail_normal_texture") and resource != null:
 					EditorInterface.edit_resource(resource)
 			)
 			# Some Godot builds emit resource_selected when clicking the picker/Edit button.
 			if picker.has_signal("resource_selected"):
 				picker.connect("resource_selected", func(resource, inspect := true):
-					if setting == "global_noise_texture" and inspect and resource != null:
+					if (setting == "global_noise_texture" or setting == "detail_normal_texture") and inspect and resource != null:
 						EditorInterface.edit_resource(resource)
 				)
 			picker.set_custom_minimum_size(Vector2(140, 25))
@@ -718,17 +786,25 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 
 func _on_chunk_selected(option_button: OptionButton, p_chunk: String) -> void:
 	var terrain := plugin.current_terrain_node
+	if terrain == null or not is_instance_valid(terrain):
+		return
 	var chunk : MarchingSquaresTerrainChunk = terrain.find_child(p_chunk)
+	if chunk == null:
+		return
 	
 	option_button.selected = chunk.merge_mode
-	selected_chunk = plugin.current_terrain_node.find_child(p_chunk)
+	selected_chunk = chunk
 	plugin.selected_chunk = selected_chunk
 	
-	plugin.gizmo_plugin.trigger_redraw(terrain)
+	if plugin.gizmo_plugin:
+		plugin.gizmo_plugin.trigger_redraw(terrain)
 
 
 func _apply_mode_to_all_chunks() -> void:
-	for child in plugin.current_terrain_node.get_children():
+	var terrain := plugin.current_terrain_node
+	if terrain == null or not is_instance_valid(terrain) or selected_chunk == null:
+		return
+	for child in terrain.get_children():
 		if child is MarchingSquaresTerrainChunk:
 			_change_chunk_mode(child, selected_chunk.merge_mode)
 
@@ -818,6 +894,12 @@ func _make_editor_name(var_name: String) -> String:
 			return "Noise Scale"
 		"global_noise_strength":
 			return "Noise Strength"
+		"detail_normal_texture":
+			return "Detail Normal Texture"
+		"detail_normal_scale":
+			return "Detail Normal Scale"
+		"detail_normal_strength":
+			return "Detail Normal Strength"
 	
 	var loose_words := var_name.split("_")
 	for word in loose_words:
