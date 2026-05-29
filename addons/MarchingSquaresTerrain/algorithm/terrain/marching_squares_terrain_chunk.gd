@@ -500,6 +500,25 @@ func generate_terrain_cells(use_threads: bool):
 	if not cell_geometry:
 		cell_geometry = {}
 	
+	# Defensive: chunks can regenerate while arrays are temporarily empty/out-of-sync (e.g. after deleting chunk data).
+	# Ensure needs_update matches the current grid before indexing needs_update[z][x].
+	var target_z := max(0, dimensions.z - 1)
+	var target_x := max(0, dimensions.x - 1)
+	var needs_rebuild := (needs_update == null or needs_update.size() != target_z)
+	if not needs_rebuild:
+		for z in range(target_z):
+			if needs_update[z] == null or needs_update[z].size() != target_x:
+				needs_rebuild = true
+				break
+	if needs_rebuild:
+		needs_update = []
+		for z in range(target_z):
+			var row := []
+			row.resize(target_x)
+			for x in range(target_x):
+				row[x] = true
+			needs_update.append(row)
+
 	global_position_cached = global_position if is_inside_tree() else position
 	var thread_pool := MarchingSquaresThreadPool.new(max(1, OS.get_processor_count()))
 	

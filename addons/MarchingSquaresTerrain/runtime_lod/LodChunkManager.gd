@@ -554,11 +554,14 @@ func _get_or_load_source(cx: int, cz: int) -> Dictionary:
 	var metadata_missing := false
 	if has_data_dir:
 		var metadata_path := t.data_directory.path_join("chunk_%d_%d" % [cx, cz]).path_join("metadata.res")
-		if ResourceLoader.exists(metadata_path):
-			var data := load(metadata_path)
+		# Deletion can race with scanning/loading. Use file_exists + type-check to avoid crashes.
+		if FileAccess.file_exists(metadata_path):
+			var data := ResourceLoader.load(metadata_path)
 			if data is MSTChunkData:
 				_loaded_from_chunk_data(data, dims_x, dims_z, heights, ground_idx)
 				loaded = true
+			else:
+				metadata_missing = true
 		else:
 			metadata_missing = true
 

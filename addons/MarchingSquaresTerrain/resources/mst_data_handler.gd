@@ -232,9 +232,10 @@ static func load_chunk_from_directory(terrain: MarchingSquaresTerrain, coords: V
 	
 	# Load metadata source data
 	var metadata_path := chunk_dir.path_join("metadata.res")
-	if ResourceLoader.exists(metadata_path):
-		var data : MSTChunkData = load(metadata_path)
-		if data:
+	# Deletion can race with scanning/loading. Use file_exists + type-check to avoid crashes.
+	if FileAccess.file_exists(metadata_path):
+		var data := ResourceLoader.load(metadata_path)
+		if data is MSTChunkData:
 			import_chunk_data(chunk, data)
 	
 	print_verbose("MSTDataHandler: Loaded chunk ", coords)
