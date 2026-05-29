@@ -285,11 +285,6 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 		texture_1 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(0, value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			if texture_1:
-				grass_mat.set_shader_parameter("use_base_color_1", false)
-			else:
-				grass_mat.set_shader_parameter("use_base_color_1", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_2 : Texture2D = null:
@@ -297,11 +292,6 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 		texture_2 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(1, value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			if texture_2:
-				grass_mat.set_shader_parameter("use_base_color_2", false)
-			else:
-				grass_mat.set_shader_parameter("use_base_color_2", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_3 : Texture2D = null:
@@ -309,11 +299,6 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 		texture_3 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(2, value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			if texture_3:
-				grass_mat.set_shader_parameter("use_base_color_3", false)
-			else:
-				grass_mat.set_shader_parameter("use_base_color_3", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_4 : Texture2D = null:
@@ -321,11 +306,6 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 		texture_4 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(3, value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			if texture_4:
-				grass_mat.set_shader_parameter("use_base_color_4", false)
-			else:
-				grass_mat.set_shader_parameter("use_base_color_4", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_5 : Texture2D = null:
@@ -333,11 +313,6 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 		texture_5 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(4, value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			if texture_5:
-				grass_mat.set_shader_parameter("use_base_color_5", false)
-			else:
-				grass_mat.set_shader_parameter("use_base_color_5", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_6 : Texture2D = null:
@@ -345,11 +320,6 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 		texture_6 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(5, value)
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			if texture_6:
-				grass_mat.set_shader_parameter("use_base_color_6", false)
-			else:
-				grass_mat.set_shader_parameter("use_base_color_6", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
 				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_7 : Texture2D:
@@ -425,78 +395,118 @@ const VOID_TEXTURE_SLOT := 15
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_slots: Array[MarchingSquaresTextureSlot] = []
 @export_custom(PROPERTY_HINT_RANGE, "1,256,1", PROPERTY_USAGE_STORAGE) var visible_texture_slot_count: int = 6
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_array: Texture2DArray
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_texture_array: Texture2DArray
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var _grass_slots_migrated: bool = false
 #endregion
 
-#region grass textures
+#region grass textures (legacy exports -> slot grass_texture)
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_sprite_tex_1 : Texture2D = preload("uid://cxvnfgy865wsk"):
 	set(value):
 		grass_sprite_tex_1 = value
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_texture_1", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[0].grass_texture = value
+			rebuild_grass_texture_array()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_sprite_tex_2 : Texture2D = preload("uid://cxvnfgy865wsk"):
 	set(value):
 		grass_sprite_tex_2 = value
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_texture_2", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[1].grass_texture = value
+			rebuild_grass_texture_array()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_sprite_tex_3 : Texture2D = preload("uid://cxvnfgy865wsk"):
 	set(value):
 		grass_sprite_tex_3 = value
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_texture_3", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[2].grass_texture = value
+			rebuild_grass_texture_array()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_sprite_tex_4 : Texture2D = preload("uid://cxvnfgy865wsk"):
 	set(value):
 		grass_sprite_tex_4 = value
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_texture_4", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[3].grass_texture = value
+			rebuild_grass_texture_array()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_sprite_tex_5 : Texture2D = preload("uid://cxvnfgy865wsk"):
 	set(value):
 		grass_sprite_tex_5 = value
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_texture_5", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[4].grass_texture = value
+			rebuild_grass_texture_array()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_sprite_tex_6 : Texture2D = preload("uid://cxvnfgy865wsk"):
 	set(value):
 		grass_sprite_tex_6 = value
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("grass_texture_6", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[5].grass_texture = value
+			rebuild_grass_texture_array()
+			_request_grass_regen()
 #endregion
 
-#region has grass variables
+#region has grass variables (legacy exports -> slot has_grass)
+# Texture 1 was historically always-on; now exposed so "Base Grass" can be disabled.
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex1_has_grass : bool = true:
+	set(value):
+		tex1_has_grass = bool(value) if value != null else true
+		if not is_batch_updating:
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[0].has_grass = tex1_has_grass
+			_request_grass_regen()
+
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex2_has_grass : bool = true:
 	set(value):
-		tex2_has_grass = value
+		tex2_has_grass = bool(value) if value != null else true
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("use_grass_tex_2", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[1].has_grass = tex2_has_grass
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex3_has_grass : bool = true:
 	set(value):
-		tex3_has_grass = value
+		tex3_has_grass = bool(value) if value != null else true
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("use_grass_tex_3", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[2].has_grass = tex3_has_grass
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex4_has_grass : bool = true:
 	set(value):
-		tex4_has_grass = value
+		tex4_has_grass = bool(value) if value != null else true
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("use_grass_tex_4", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[3].has_grass = tex4_has_grass
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex5_has_grass : bool = true:
 	set(value):
-		tex5_has_grass = value
+		tex5_has_grass = bool(value) if value != null else true
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("use_grass_tex_5", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[4].has_grass = tex5_has_grass
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex6_has_grass : bool = true:
 	set(value):
-		tex6_has_grass = value
+		tex6_has_grass = bool(value) if value != null else true
 		if not is_batch_updating:
-			var grass_mat := grass_mesh.material as ShaderMaterial
-			grass_mat.set_shader_parameter("use_grass_tex_6", value)
+			_ensure_texture_slots()
+			_maybe_migrate_legacy_grass()
+			texture_slots[5].has_grass = tex6_has_grass
+			_request_grass_regen()
 #endregion
 
 #region texture albedos
@@ -773,12 +783,14 @@ func get_chunk_surface_material() -> Material:
 
 var _outline_apply_deferred: bool = false
 var _outline_apply_timer: Timer = null
+var _outline_apply_pending: bool = false
 
 # Internal edge outlines: rebuild gradually to avoid editor freezes when enabling silhouette on many chunks.
 var _internal_outline_rebuild_active: bool = false
 var _internal_outline_rebuild_queue: Array[MarchingSquaresTerrainChunk] = []
 
 var _grass_regen_timer: Timer = null
+var _grass_regen_pending: bool = false
 
 
 func _request_grass_regen() -> void:
@@ -787,6 +799,11 @@ func _request_grass_regen() -> void:
 
 	# Coalesce editor slider drags into a single grass rebuild.
 	if EngineWrapper.instance.is_editor():
+		# Tool scripts can run while the node is not inside the scene tree (e.g. during load).
+		# Timers cannot be started until we're inside the tree.
+		if not is_inside_tree():
+			_grass_regen_pending = true
+			return
 		if _grass_regen_timer == null:
 			_grass_regen_timer = Timer.new()
 			_grass_regen_timer.name = "_mst_grass_regen_timer"
@@ -812,6 +829,11 @@ func _request_outline_apply() -> void:
 
 	# Editor changes (slider drags, rapid UI updates) should coalesce into a single apply.
 	if EngineWrapper.instance.is_editor():
+		# Tool scripts can run while the node is not inside the scene tree (e.g. during load).
+		# Timers cannot be started until we're inside the tree.
+		if not is_inside_tree():
+			_outline_apply_pending = true
+			return
 		if _outline_apply_timer == null:
 			_outline_apply_timer = Timer.new()
 			_outline_apply_timer.name = "_mst_outline_apply_timer"
@@ -913,6 +935,13 @@ func _ensure_texture_slots() -> void:
 		# Default any missing 'active' to true (older saves won't have it).
 		if texture_slots[i] != null and texture_slots[i].get("active") == null:
 			texture_slots[i].active = true
+		# Default any missing grass fields (older saves / older slot resources).
+		# Slot 0 (Texture 1) defaults to having grass enabled.
+		if texture_slots[i] != null and texture_slots[i].get("has_grass") == null:
+			texture_slots[i].has_grass = (i == 0)
+		# grass_texture can be null; only coerce if the key is missing (avoid nil variants).
+		if texture_slots[i] != null and texture_slots[i].get("grass_texture") == null:
+			texture_slots[i].grass_texture = null
 
 	# Ensure legacy VOID slot always has a valid texture.
 	if texture_slots.size() > VOID_TEXTURE_SLOT and texture_slots[VOID_TEXTURE_SLOT] and texture_slots[VOID_TEXTURE_SLOT].texture == null:
@@ -988,6 +1017,54 @@ func _maybe_migrate_legacy_textures() -> void:
 		texture_slots[i].scale = legacy_scales[i]
 
 
+func _maybe_migrate_legacy_grass() -> void:
+	# One-time migration: copy legacy grass exports into slots 0..5.
+	# Legacy behavior: Texture 1 grass always on; textures 2-6 are toggleable.
+	if _grass_slots_migrated:
+		return
+	_grass_slots_migrated = true
+	_ensure_texture_slots()
+
+	# Ensure slots exist.
+	for i in range(6):
+		if texture_slots[i] == null:
+			texture_slots[i] = MarchingSquaresTextureSlot.new()
+
+	# Sprites (legacy exports) -> slots
+	texture_slots[0].grass_texture = grass_sprite_tex_1
+	texture_slots[1].grass_texture = grass_sprite_tex_2
+	texture_slots[2].grass_texture = grass_sprite_tex_3
+	texture_slots[3].grass_texture = grass_sprite_tex_4
+	texture_slots[4].grass_texture = grass_sprite_tex_5
+	texture_slots[5].grass_texture = grass_sprite_tex_6
+
+	# Has grass flags -> slots (cast to bool; older scenes can deserialize these as Nil)
+	var t1 := tex1_has_grass
+	if t1 == null:
+		t1 = true
+	var t2 := tex2_has_grass
+	if t2 == null:
+		t2 = true
+	var t3 := tex3_has_grass
+	if t3 == null:
+		t3 = true
+	var t4 := tex4_has_grass
+	if t4 == null:
+		t4 = true
+	var t5 := tex5_has_grass
+	if t5 == null:
+		t5 = true
+	var t6 := tex6_has_grass
+	if t6 == null:
+		t6 = true
+	texture_slots[0].has_grass = bool(t1)
+	texture_slots[1].has_grass = bool(t2)
+	texture_slots[2].has_grass = bool(t3)
+	texture_slots[3].has_grass = bool(t4)
+	texture_slots[4].has_grass = bool(t5)
+	texture_slots[5].has_grass = bool(t6)
+
+
 func _set_legacy_texture_slot(slot_idx: int, tex: Texture2D) -> void:
 	_ensure_texture_slots()
 	if slot_idx < 0 or slot_idx >= 15:
@@ -1013,6 +1090,22 @@ func _push_tex_scales() -> void:
 	terrain_material.set_shader_parameter("tex_scales", scales)
 
 
+func _get_decompressed_image(tex: Texture2D) -> Image:
+	if tex == null:
+		return null
+	var img := tex.get_image()
+	if img == null:
+		return null
+	if img.is_compressed():
+		var d := img.duplicate()
+		d.decompress()
+		# Some Godot builds don't return an Error code from decompress(), so verify via state.
+		if d.is_compressed():
+			return null
+		img = d
+	return img
+
+
 func rebuild_texture_array() -> void:
 	_ensure_texture_slots()
 	var canonical_w := 1
@@ -1025,7 +1118,7 @@ func rebuild_texture_array() -> void:
 		var tex := texture_slots[i].texture if texture_slots[i] != null else null
 		if tex == null:
 			continue
-		var img := tex.get_image()
+		var img := _get_decompressed_image(tex)
 		if img == null:
 			continue
 		canonical_w = img.get_width()
@@ -1050,7 +1143,7 @@ func rebuild_texture_array() -> void:
 		if tex == null:
 			images[i] = (void_placeholder if is_void else placeholder).duplicate()
 			continue
-		var img := tex.get_image()
+		var img := _get_decompressed_image(tex)
 		if img == null:
 			images[i] = (void_placeholder if is_void else placeholder).duplicate()
 			continue
@@ -1069,6 +1162,63 @@ func rebuild_texture_array() -> void:
 
 	texture_array = arr
 	terrain_material.set_shader_parameter("vc_tex_array", texture_array)
+
+
+func rebuild_grass_texture_array() -> void:
+	_ensure_texture_slots()
+	_maybe_migrate_legacy_grass()
+	if grass_mesh == null or grass_mesh.material == null:
+		return
+
+	# Find canonical image properties from the first non-null grass sprite.
+	var canonical_w := 1
+	var canonical_h := 1
+	var canonical_format := Image.FORMAT_RGBA8
+	var canonical_mipmaps := false
+	for i in range(MAX_TEXTURE_SLOTS):
+		var tex := texture_slots[i].grass_texture if texture_slots[i] != null else null
+		if tex == null:
+			continue
+		var img := _get_decompressed_image(tex)
+		if img == null:
+			continue
+		canonical_w = img.get_width()
+		canonical_h = img.get_height()
+		canonical_format = img.get_format()
+		canonical_mipmaps = img.get_mipmap_count() > 1
+		break
+
+	# Transparent placeholder for "no sprite".
+	var placeholder := Image.create_empty(canonical_w, canonical_h, canonical_mipmaps, canonical_format)
+	placeholder.fill(Color(1, 1, 1, 0))
+
+	var images: Array[Image] = []
+	images.resize(MAX_TEXTURE_SLOTS)
+	for i in range(MAX_TEXTURE_SLOTS):
+		var tex := texture_slots[i].grass_texture if texture_slots[i] != null else null
+		if tex == null:
+			images[i] = placeholder.duplicate()
+			continue
+		var img := _get_decompressed_image(tex)
+		if img == null:
+			images[i] = placeholder.duplicate()
+			continue
+		var mismatched := img.get_width() != canonical_w or img.get_height() != canonical_h or img.get_format() != canonical_format or (img.get_mipmap_count() > 1) != canonical_mipmaps
+		if mismatched:
+			push_warning("[MST] Grass slot %d mismatches grass texture array format/size; using placeholder." % i)
+			images[i] = placeholder.duplicate()
+			continue
+		images[i] = img
+
+	var arr := Texture2DArray.new()
+	var err := arr.create_from_images(images)
+	if err != OK:
+		push_warning("[MST] Failed to build grass Texture2DArray (err=%s)." % str(err))
+		return
+
+	grass_texture_array = arr
+	var grass_mat := grass_mesh.material as ShaderMaterial
+	grass_mat.set_shader_parameter("grass_texture_array", grass_texture_array)
 
 
 func _notification(what: int) -> void:
@@ -1150,7 +1300,14 @@ func _deferred_enter_tree() -> void:
 			chunk.regenerate_mesh(true)
 	
 	# Chunks now exist; apply current outline mode so materials + per-chunk overlays are generated.
+	_outline_apply_pending = false
 	_apply_outline_next_pass()
+	
+	# If any tool-script setters tried to schedule work before we entered the tree,
+	# flush it now.
+	if _grass_regen_pending:
+		_grass_regen_pending = false
+		_apply_grass_regen()
 	
 	load_finished.emit()
 
@@ -1290,9 +1447,10 @@ func _ensure_textures() -> void:
 		_push_tex_scales()
 		_ensure_palette_settings()
 		_rebuild_palette_uniforms()
-	if grass_sprite_tex_6 and grass_mat.get_shader_parameter("grass_texture_6") == null:
-		grass_mat.set_shader_parameter("grass_texture_6", grass_sprite_tex_6)
-	
+	if grass_mat.get_shader_parameter("grass_texture_array") == null:
+		_ensure_texture_slots()
+		_maybe_migrate_legacy_grass()
+		rebuild_grass_texture_array()
 	
 	if grass_mat.get_shader_parameter("wind_texture") == null:
 		grass_mat.set_shader_parameter("wind_texture", placeholder_wind_texture)
@@ -1418,29 +1576,9 @@ func force_batch_update() -> void:
 	_ensure_palette_settings()
 	_rebuild_palette_uniforms()
 	
-	# GRASS MATERIAL - Grass Textures 
-	grass_mat.set_shader_parameter("grass_texture_1", grass_sprite_tex_1)
-	grass_mat.set_shader_parameter("grass_texture_2", grass_sprite_tex_2)
-	grass_mat.set_shader_parameter("grass_texture_3", grass_sprite_tex_3)
-	grass_mat.set_shader_parameter("grass_texture_4", grass_sprite_tex_4)
-	grass_mat.set_shader_parameter("grass_texture_5", grass_sprite_tex_5)
-	grass_mat.set_shader_parameter("grass_texture_6", grass_sprite_tex_6)
-	
-	
-	# GRASS MATERIAL - Use Base Color Flags 
-	grass_mat.set_shader_parameter("use_base_color_1", texture_1 == null)
-	grass_mat.set_shader_parameter("use_base_color_2", texture_2 == null)
-	grass_mat.set_shader_parameter("use_base_color_3", texture_3 == null)
-	grass_mat.set_shader_parameter("use_base_color_4", texture_4 == null)
-	grass_mat.set_shader_parameter("use_base_color_5", texture_5 == null)
-	grass_mat.set_shader_parameter("use_base_color_6", texture_6 == null)
-	
-	# GRASS MATERIAL - Has Grass Flags 
-	grass_mat.set_shader_parameter("use_grass_tex_2", tex2_has_grass)
-	grass_mat.set_shader_parameter("use_grass_tex_3", tex3_has_grass)
-	grass_mat.set_shader_parameter("use_grass_tex_4", tex4_has_grass)
-	grass_mat.set_shader_parameter("use_grass_tex_5", tex5_has_grass)
-	grass_mat.set_shader_parameter("use_grass_tex_6", tex6_has_grass)
+	# GRASS MATERIAL - Grass Textures (Texture2DArray)
+	_maybe_migrate_legacy_grass()
+	rebuild_grass_texture_array()
 	
 	# GRASS MATERIAL - Wind
 	grass_mat.set_shader_parameter("wind_mode", wind_mode)
@@ -1513,13 +1651,13 @@ func save_to_preset() -> void:
 	current_texture_preset.new_textures.texture_scales[13] = texture_scale_14
 	current_texture_preset.new_textures.texture_scales[14] = texture_scale_15
 	
-	# Grass sprites
-	current_texture_preset.new_textures.grass_sprites[0] = grass_sprite_tex_1
-	current_texture_preset.new_textures.grass_sprites[1] = grass_sprite_tex_2
-	current_texture_preset.new_textures.grass_sprites[2] = grass_sprite_tex_3
-	current_texture_preset.new_textures.grass_sprites[3] = grass_sprite_tex_4
-	current_texture_preset.new_textures.grass_sprites[4] = grass_sprite_tex_5
-	current_texture_preset.new_textures.grass_sprites[5] = grass_sprite_tex_6
+	# Grass sprites (slot-based)
+	_ensure_texture_slots()
+	_maybe_migrate_legacy_grass()
+	if current_texture_preset.new_textures.grass_sprites.size() != MAX_TEXTURE_SLOTS:
+		current_texture_preset.new_textures.grass_sprites.resize(MAX_TEXTURE_SLOTS)
+	for i in range(MAX_TEXTURE_SLOTS):
+		current_texture_preset.new_textures.grass_sprites[i] = texture_slots[i].grass_texture if texture_slots[i] != null else null
 	
 	# Palette system
 	current_texture_preset.new_textures.grass_colors.resize(128)
@@ -1534,12 +1672,13 @@ func save_to_preset() -> void:
 	current_texture_preset.slot_outline_modes = slot_outline_modes.duplicate()
 	current_texture_preset.slot_outline_widths = slot_outline_widths.duplicate()
 	
-	# Has grass flags
-	current_texture_preset.new_textures.has_grass[0] = tex2_has_grass
-	current_texture_preset.new_textures.has_grass[1] = tex3_has_grass
-	current_texture_preset.new_textures.has_grass[2] = tex4_has_grass
-	current_texture_preset.new_textures.has_grass[3] = tex5_has_grass
-	current_texture_preset.new_textures.has_grass[4] = tex6_has_grass
+	# Has grass flags (slot-based)
+	_ensure_texture_slots()
+	_maybe_migrate_legacy_grass()
+	if current_texture_preset.new_textures.has_grass.size() != MAX_TEXTURE_SLOTS:
+		current_texture_preset.new_textures.has_grass.resize(MAX_TEXTURE_SLOTS)
+	for i in range(MAX_TEXTURE_SLOTS):
+		current_texture_preset.new_textures.has_grass[i] = bool(texture_slots[i].has_grass) if texture_slots[i] != null else false
 	
 	ResourceSaver.save(current_texture_preset)
 

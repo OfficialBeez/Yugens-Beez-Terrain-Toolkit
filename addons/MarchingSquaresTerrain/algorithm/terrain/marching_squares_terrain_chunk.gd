@@ -127,6 +127,20 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 		grass_planter.terrain_system = terrain_system
 		grass_planter._chunk = self
 		
+	# Generate maps if not loaded from external storage (works for both editor and runtime)
+	if height_map == null or height_map.is_empty():
+		generate_height_map()
+	if color_map_0 == null or color_map_0.is_empty() or color_map_1 == null or color_map_1.is_empty():
+		generate_color_maps()
+	var migrated_wall_defaults := false
+	if wall_color_map_0 == null or wall_color_map_0.is_empty() or wall_color_map_1 == null or wall_color_map_1.is_empty():
+		generate_wall_color_maps()
+	else:
+		# Auto-fix legacy/uninitialized wall maps (often all slot 0) so Default Wall actually applies.
+		migrated_wall_defaults = _migrate_uninitialized_wall_color_maps()
+	if grass_mask_map == null or grass_mask_map.is_empty():
+		generate_grass_mask_map()
+	
 	if _temp_grass_multimesh:
 		grass_planter.multimesh = _temp_grass_multimesh
 	grass_planter.ensure_multimesh_count()
@@ -134,20 +148,6 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 		grass_planter.setup(self)
 		grass_planter.regenerate_all_cells()
 	grass_planter.multimesh.mesh = terrain_system.grass_mesh
-	
-	# Generate maps if not loaded from external storage (works for both editor and runtime)
-	if not height_map:
-		generate_height_map()
-	if not color_map_0 or not color_map_1:
-		generate_color_maps()
-	var migrated_wall_defaults := false
-	if not wall_color_map_0 or not wall_color_map_1:
-		generate_wall_color_maps()
-	else:
-		# Auto-fix legacy/uninitialized wall maps (often all slot 0) so Default Wall actually applies.
-		migrated_wall_defaults = _migrate_uninitialized_wall_color_maps()
-	if not grass_mask_map:
-		generate_grass_mask_map()
 	
 	# If we migrated wall defaults, we MUST rebuild even in baked-mode loads (should_regenerate_mesh can be false).
 	if migrated_wall_defaults:
@@ -274,6 +274,16 @@ func _exit_tree() -> void:
 
 
 func regenerate_mesh(use_threads: bool = false):
+	# Defensive: some callers (e.g. GrassPlanter) may trigger mesh regen before maps are initialized.
+	if height_map == null or height_map.is_empty():
+		generate_height_map()
+	if color_map_0 == null or color_map_0.is_empty() or color_map_1 == null or color_map_1.is_empty():
+		generate_color_maps()
+	if wall_color_map_0 == null or wall_color_map_0.is_empty() or wall_color_map_1 == null or wall_color_map_1.is_empty():
+		generate_wall_color_maps()
+	if grass_mask_map == null or grass_mask_map.is_empty():
+		generate_grass_mask_map()
+	
 	st = SurfaceTool.new()
 	# NOTE: create_from() is unnecessary here because we immediately begin() a fresh surface.
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)

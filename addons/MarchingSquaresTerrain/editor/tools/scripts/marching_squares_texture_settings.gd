@@ -112,6 +112,11 @@ func _ensure_terrain_arrays(terrain: Object) -> bool:
 		# Default any missing 'active' to true (older saves won't have it).
 		if slots_var[i] != null and slots_var[i].get("active") == null:
 			slots_var[i].active = true
+		# Default grass fields for older slot resources.
+		if slots_var[i] != null and slots_var[i].get("has_grass") == null:
+			slots_var[i].has_grass = (i == 0)
+		if slots_var[i] != null and slots_var[i].get("grass_texture") == null:
+			slots_var[i].grass_texture = null
 	
 	# Palette-per-slot arrays (all optional, but expected for the UI).
 	var slot_color_indices := terrain.get("slot_color_indices")
@@ -336,34 +341,7 @@ func add_texture_settings() -> void:
 			editor_r_picker.set_custom_minimum_size(Vector2(100, 25))
 			vbox.add_child(editor_r_picker, true)
 		
-		# Grass settings (still legacy, only used for first 6 slots currently)
-		if i <= 5:
-			var sprite_prop := "grass_sprite_tex_%d" % (i + 1)
-			var sprite_var : Texture2D = terrain.get(sprite_prop)
-			if sprite_var != null and not (sprite_var is Texture2D):
-				sprite_var = null
-			
-			var editor_r_picker2 := EditorResourcePicker.new()
-			editor_r_picker2.set_base_type("Texture2D")
-			editor_r_picker2.edited_resource = sprite_var
-			editor_r_picker2.resource_changed.connect(func(resource, prop := sprite_prop): _on_texture_setting_changed(prop, resource))
-			editor_r_picker2.set_custom_minimum_size(Vector2(100, 25))
-			vbox.add_child(editor_r_picker2, true)
-		
-		if i >= 1 and i <= 5:
-			var use_grass_prop := "tex%d_has_grass" % (i + 1)
-			var use_grass_var : bool = bool(terrain.get(use_grass_prop))
-			var checkbox := CheckBox.new()
-			checkbox.text = "Has grass"
-			checkbox.set_flat(true)
-			checkbox.button_pressed = use_grass_var
-			checkbox.toggled.connect(func(pressed, prop := use_grass_prop): _on_texture_setting_changed(prop, pressed))
-			checkbox.set_custom_minimum_size(Vector2(25, 15))
-			
-			var c_cont_3 := CenterContainer.new()
-			c_cont_3.set_custom_minimum_size(Vector2(25, 25))
-			c_cont_3.add_child(checkbox, true)
-			vbox.add_child(c_cont_3, true)
+		# Grass settings are built next to outline settings in _build_palette_ui() for each slot.
 		
 		# Scale slider (slot-based)
 		var scale_value : float = float(slot.scale) if slot != null else 1.0
@@ -609,14 +587,83 @@ func _build_palette_ui(vbox: VBoxContainer, terrain: MarchingSquaresTerrain, slo
 	)
 	vbox.add_child(add_btn, true)
 
+	# Grass settings (slot-based)
+	var slot_res := terrain.texture_slots[slot]
+	var has_grass_var := bool(slot_res.has_grass) if slot_res != null else (slot == 0)
+	var grass_cb := CheckBox.new()
+	grass_cb.text = "Has Grass"
+	grass_cb.set_flat(true)
+	grass_cb.button_pressed = has_grass_var
+	grass_cb.set_custom_minimum_size(Vector2(25, 15))
+
+	var grass_center := CenterContainer.new()
+	grass_center.set_custom_minimum_size(Vector2(25, 25))
+	grass_center.add_child(grass_cb, true)
+	vbox.add_child(grass_center, true)
+
+	var grass_picker := EditorResourcePicker.new()
+	grass_picker.set_base_type("Texture2D")
+	var grass_tex_var : Texture2D = slot_res.grass_texture if slot_res != null else null
+	if grass_tex_var != null and not (grass_tex_var is Texture2D):
+		grass_tex_var = null
+	grass_picker.edited_resource = grass_tex_var
+	grass_picker.visible = grass_cb.button_pressed
+	grass_picker.set_custom_minimum_size(Vector2(100, 25))
+	vbox.add_child(grass_picker, true)
+
+	grass_cb.toggled.connect(func(pressed: bool, p_idx := slot):
+		grass_picker.visible = pressed
+		if not _ensure_terrain_arrays(terrain):
+			return
+		if terrain.texture_slots[p_idx] == null:
+			terrain.texture_slots[p_idx] = MarchingSquaresTextureSlot.new()
+		terrain.texture_slots[p_idx].has_grass = pressed
+
+		# Keep legacy properties in sync for slots 1..6 so presets/UI stay compatible.
+		if p_idx >= 0 and p_idx < 6:
+			terrain.set("tex%d_has_grass" % (p_idx + 1), pressed)
+		else:
+			if terrain.has_method("_request_grass_regen"):
+				terrain._request_grass_regen()
+
+		if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+			terrain.save_to_preset()
+	)
+
+	grass_picker.resource_changed.connect(func(resource, p_idx := slot):
+		if resource != null and not (resource is Texture2D):
+			resource = null
+		if not _ensure_terrain_arrays(terrain):
+			return
+		if terrain.texture_slots[p_idx] == null:
+			terrain.texture_slots[p_idx] = MarchingSquaresTextureSlot.new()
+		terrain.texture_slots[p_idx].grass_texture = resource
+
+		# Keep legacy properties in sync for slots 1..6 so presets/UI stay compatible.
+		if p_idx >= 0 and p_idx < 6:
+			terrain.set("grass_sprite_tex_%d" % (p_idx + 1), resource)
+		else:
+			if terrain.has_method("rebuild_grass_texture_array"):
+				terrain.rebuild_grass_texture_array()
+			if terrain.has_method("_request_grass_regen"):
+				terrain._request_grass_regen()
+
+		if terrain.current_texture_preset != null and not terrain.current_texture_preset.resource_path.is_empty():
+			terrain.save_to_preset()
+	)
+
 	# Outline settings
 	terrain._ensure_outline_settings()
 	var outline_cb := CheckBox.new()
 	outline_cb.text = "Has Outline"
 	outline_cb.set_flat(true)
 	outline_cb.button_pressed = terrain.slot_has_outline[slot]
-	outline_cb.set_custom_minimum_size(Vector2(150, 18))
-	vbox.add_child(outline_cb, true)
+	outline_cb.set_custom_minimum_size(Vector2(25, 15))
+
+	var outline_center := CenterContainer.new()
+	outline_center.set_custom_minimum_size(Vector2(25, 25))
+	outline_center.add_child(outline_cb, true)
+	vbox.add_child(outline_center, true)
 
 	var outline_mode_hbox := HBoxContainer.new()
 	outline_mode_hbox.set_custom_minimum_size(Vector2(150, 20))

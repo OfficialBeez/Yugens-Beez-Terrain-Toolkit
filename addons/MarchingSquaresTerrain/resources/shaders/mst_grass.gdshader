@@ -9,29 +9,7 @@ uniform sampler2D palette_meta_tex : filter_nearest;
 group_uniforms;
 
 group_uniforms Visuals.Textures;
-uniform sampler2D grass_texture_1 : source_color, filter_nearest;
-uniform sampler2D grass_texture_2 : source_color, filter_nearest;
-uniform sampler2D grass_texture_3 : source_color, filter_nearest;
-uniform sampler2D grass_texture_4 : source_color, filter_nearest;
-uniform sampler2D grass_texture_5 : source_color, filter_nearest;
-uniform sampler2D grass_texture_6 : source_color, filter_nearest;
-group_uniforms;
-
-group_uniforms Visuals.Texture_Mode;
-uniform bool use_grass_tex_2 = true;
-uniform bool use_grass_tex_3 = true;
-uniform bool use_grass_tex_4 = true;
-uniform bool use_grass_tex_5 = true;
-uniform bool use_grass_tex_6 = true;
-group_uniforms;
-
-group_uniforms Visuals.Color_Mode;
-uniform bool use_base_color_1 = false;
-uniform bool use_base_color_2 = false;
-uniform bool use_base_color_3 = false;
-uniform bool use_base_color_4 = false;
-uniform bool use_base_color_5 = false;
-uniform bool use_base_color_6 = false;
+uniform sampler2DArray grass_texture_array : source_color, filter_nearest;
 group_uniforms;
 
 group_uniforms Animations.Settings;
@@ -77,7 +55,9 @@ uniform sampler2D global_noise_texture : hint_default_white, repeat_enable, filt
 varying vec3 v_grass_color;
 varying vec3 model_origin;
 varying vec3 instance_color;
+// Encodes the terrain texture slot index (0..255) as a 0..1 value.
 varying float instance_sprite_id;
+varying flat int slot_id;
 varying flat int instance_id;
 varying float wind_color;
 
@@ -443,20 +423,9 @@ void vertex() {
 	instance_sprite_id = INSTANCE_CUSTOM.a;
 	instance_id = INSTANCE_ID;
 	
-	vec3 _gc;
-	if (instance_sprite_id > 0.9)
-		_gc = use_base_color_6 ? get_grass_palette_color(5, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(5, world_origin.xz, world_origin.y);
-	else if (instance_sprite_id > 0.7)
-		_gc = use_base_color_5 ? get_grass_palette_color(4, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(4, world_origin.xz, world_origin.y);
-	else if (instance_sprite_id > 0.5)
-		_gc = use_base_color_4 ? get_grass_palette_color(3, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(3, world_origin.xz, world_origin.y);
-	else if (instance_sprite_id > 0.3)
-		_gc = use_base_color_3 ? get_grass_palette_color(2, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(2, world_origin.xz, world_origin.y);
-	else if (instance_sprite_id > 0.1)
-		_gc = use_base_color_2 ? get_grass_palette_color(1, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(1, world_origin.xz, world_origin.y);
-	else
-		_gc = use_base_color_1 ? get_grass_palette_color(0, world_origin.xz, world_origin.y) : instance_color * get_grass_palette_color(0, world_origin.xz, world_origin.y);
-	v_grass_color = _gc;
+	// Decode slot index from INSTANCE_CUSTOM.a (0..1 => 0..255).
+	slot_id = clamp(int(floor(instance_sprite_id * 256.0)), 0, 255);
+	v_grass_color = instance_color * get_grass_palette_color(slot_id, world_origin.xz, world_origin.y);
 	
 
 	vec3 world_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
@@ -465,16 +434,9 @@ void vertex() {
 
 void fragment() {
 	ALPHA_SCISSOR_THRESHOLD = 0.5;
-	vec4 grass_tex = texture(grass_texture_1, UV);
+	vec4 grass_tex = texture(grass_texture_array, vec3(UV, float(slot_id)));
 
 	vec3 grass_color = v_grass_color;
-	int tex_id = 1;
-	if (instance_sprite_id > 0.9) tex_id = 6;
-	else if (instance_sprite_id > 0.7) tex_id = 5;
-	else if (instance_sprite_id > 0.5) tex_id = 4;
-	else if (instance_sprite_id > 0.3) tex_id = 3;
-	else if (instance_sprite_id > 0.1) tex_id = 2;
-
 	if (wind_tip_strength > 0.0) {
 		float tip_mask = smoothstep(0.4, 1.0, 1.0 - UV.y);
 		float gust_mask = smoothstep(0.1, 0.7, wind_color);
@@ -488,19 +450,7 @@ void fragment() {
 	if (is_merge_round && wall_threshold <= 0.0)
 		w_threshold -= 1.5;
 	if (dot(vertex_normal, vec3(0.0, 1.0, 0.0)) > w_threshold) {
-		if (tex_id == 2) {
-			ALPHA = use_grass_tex_2 ? texture(grass_texture_2, UV).a : 0.0;
-		} else if (tex_id == 3) {
-			ALPHA = use_grass_tex_3 ? texture(grass_texture_3, UV).a : 0.0;
-		} else if (tex_id == 4) {
-			ALPHA = use_grass_tex_4 ? texture(grass_texture_4, UV).a : 0.0;
-		} else if (tex_id == 5) {
-			ALPHA = use_grass_tex_5 ? texture(grass_texture_5, UV).a : 0.0;
-		} else if (tex_id == 6) {
-			ALPHA = use_grass_tex_6 ? texture(grass_texture_6, UV).a : 0.0;
-		} else {
-			ALPHA = grass_tex.a;
-		}
+		ALPHA = grass_tex.a;
 	} else {
 		ALPHA = 0.0;
 	}

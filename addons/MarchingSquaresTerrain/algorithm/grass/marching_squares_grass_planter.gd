@@ -3,8 +3,6 @@ extends MultiMeshInstance3D
 class_name MarchingSquaresGrassPlanter
 
 
-# Alpha values for grass sprites by texture ID (1-6)
-const GRASS_ALPHA_VALUES := [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 
 var _chunk : MarchingSquaresTerrainChunk
@@ -293,39 +291,28 @@ func _get_texture_id(vc_col_0: Color, vc_col_1: Color) -> int:
 func _has_grass_for_texture(texture_id: int, force_grass_on: bool) -> bool:
 	if force_grass_on:
 		return true
-	if texture_id == 1:
-		return true
-	if texture_id < 2 or texture_id > 6:
-		return false
 	
-	var has_grass_flags := [
-		terrain_system.tex2_has_grass,
-		terrain_system.tex3_has_grass,
-		terrain_system.tex4_has_grass,
-		terrain_system.tex5_has_grass,
-		terrain_system.tex6_has_grass
-	]
-	return has_grass_flags[texture_id - 2]
+	if not terrain_system or terrain_system.texture_slots.is_empty():
+		# Legacy-safe fallback.
+		return texture_id == 1
+	
+	var slot_idx := clampi(texture_id - 1, 0, 255)
+	if slot_idx >= terrain_system.texture_slots.size() or terrain_system.texture_slots[slot_idx] == null:
+		return texture_id == 1
+	
+	return bool(terrain_system.texture_slots[slot_idx].has_grass)
 
 
 ## Gets the texture scale for the given texture ID.
 func _get_texture_scale(texture_id: int) -> float:
-	var scales := [
-		terrain_system.texture_scale_1,
-		terrain_system.texture_scale_2,
-		terrain_system.texture_scale_3,
-		terrain_system.texture_scale_4,
-		terrain_system.texture_scale_5,
-		terrain_system.texture_scale_6
-	]
-	var idx := clampi(texture_id - 1, 0, 5)
-	return scales[idx]
-
-
-## Gets the grass sprite alpha value for the given texture ID.
-func _get_grass_alpha(texture_id: int) -> float:
-	var idx := clampi(texture_id - 1, 0, 5)
-	return GRASS_ALPHA_VALUES[idx]
+	if not terrain_system:
+		return 1.0
+	
+	var slot_idx := clampi(texture_id - 1, 0, 255)
+	if terrain_system.texture_slots.size() > slot_idx and terrain_system.texture_slots[slot_idx] != null:
+		return float(terrain_system.texture_slots[slot_idx].scale)
+	
+	return 1.0
 
 
 ## Samples the terrain texture color at the given world position.
@@ -412,7 +399,9 @@ func _create_grass_instance(index: int, world_pos: Vector3, a: Vector3, b: Vecto
 
 	var tex_scale := _get_texture_scale(texture_id)
 	var instance_color := _sample_terrain_texture_color(world_pos, texture_id, tex_scale)
-	instance_color.a = _get_grass_alpha(texture_id)
+	# Encode slot index (0..255) into INSTANCE_CUSTOM.a as a 0..1 value.
+	var slot_idx := clampi(texture_id - 1, 0, 255)
+	instance_color.a = (float(slot_idx) + 0.5) / 256.0
 	multimesh.set_instance_custom_data(index, instance_color)
 
 

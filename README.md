@@ -7,13 +7,28 @@ This project is an effort to create a simple to use and powerfull terrain author
 * Level terrain to a user-set height
 * Smooth terrain depending on the average height of neighbouring cells
 * Create a bridge between two points by drawing a line between them
-* Paint up to 15(+1) custom textures onto the terrain
+* Use up to 256 Textures/color palettes in the Vertex Painter
 * Paint a mask map that determines whether selected cells should draw `MultiMeshInstance3d` grass instances
 * Get debug information for selected cells
 * Change the internal marching squares algorithm vertex merge threshold value resulting in smoother or blockier terrain
 * Change global terrain settings like the default wall texture, texture blend mode, grass animation fps and more...
 
 For more in-depth documentation, please refer to the _documentation_ folder in the addon.
+
+## Runtime LOD streaming (experimental)
+There is an experimental runtime chunk streaming + LOD system in:
+`addons/MarchingSquaresTerrain/runtime_lod/`
+
+Quick demo:
+1. Open `addons/MarchingSquaresTerrain/runtime_lod/demo/lod_demo.tscn`
+2. Run the scene
+3. Use arrow keys to move, PageUp/PageDown to go up/down
+
+Using it with an existing terrain:
+- Add a `LodChunkManager` node to your scene
+- Assign your `MarchingSquaresTerrain` node to the manager’s `terrain` field (or set `terrain_path`)
+- Set `view_radius_chunks`, `lod_distances`, `max_mesh_applies_per_frame` for performance
+- Seam handling uses *skirts* (set `skirt_depth` > 0 to hide cracks between different LODs)
 
 For community showcases, feature requests and bug reporting, please refer to the [discord](https://discord.gg/ZSeYkTCgft).
 A bug can also be reported by opening a new issue thread in the issues tab of this github project.

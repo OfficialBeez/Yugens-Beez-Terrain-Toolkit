@@ -183,6 +183,8 @@ func _on_setting_changed(p_setting_name: String, p_value: Variant) -> void:
 
 func _apply_preset_to_terrain(preset: MarchingSquaresTexturePreset, terrain: MarchingSquaresTerrain) -> void:
 	var t := preset.new_textures
+	if t != null and t.has_method("_ensure_grass_arrays"):
+		t._ensure_grass_arrays()
 
 	# Terrain textures
 	terrain.texture_1  = t.terrain_textures[0]
@@ -216,21 +218,50 @@ func _apply_preset_to_terrain(preset: MarchingSquaresTexturePreset, terrain: Mar
 	terrain.texture_scale_13 = t.texture_scales[12]
 	terrain.texture_scale_14 = t.texture_scales[13]
 	terrain.texture_scale_15 = t.texture_scales[14]
-	# Grass sprites
-	terrain.grass_sprite_tex_1 = t.grass_sprites[0]
-	terrain.grass_sprite_tex_2 = t.grass_sprites[1]
-	terrain.grass_sprite_tex_3 = t.grass_sprites[2]
-	terrain.grass_sprite_tex_4 = t.grass_sprites[3]
-	terrain.grass_sprite_tex_5 = t.grass_sprites[4]
-	terrain.grass_sprite_tex_6 = t.grass_sprites[5]
-	# Palette system
+	# Grass (slot-based when available)
 	terrain.load_from_preset(preset)
-	# Has grass flags
-	terrain.tex2_has_grass = t.has_grass[0]
-	terrain.tex3_has_grass = t.has_grass[1]
-	terrain.tex4_has_grass = t.has_grass[2]
-	terrain.tex5_has_grass = t.has_grass[3]
-	terrain.tex6_has_grass = t.has_grass[4]
+	
+	var slot_count := 256
+	if t.grass_sprites.size() >= slot_count or t.has_grass.size() >= slot_count:
+		terrain._ensure_texture_slots()
+		for i in range(slot_count):
+			if terrain.texture_slots[i] == null:
+				terrain.texture_slots[i] = MarchingSquaresTextureSlot.new()
+			if i < t.grass_sprites.size():
+				terrain.texture_slots[i].grass_texture = t.grass_sprites[i]
+			if i < t.has_grass.size():
+				terrain.texture_slots[i].has_grass = bool(t.has_grass[i])
+		terrain.rebuild_grass_texture_array()
+		terrain._request_grass_regen()
+		# Keep legacy exports in sync for the first 6 (presets/UI/back-compat)
+		if t.grass_sprites.size() >= 6:
+			terrain.grass_sprite_tex_1 = t.grass_sprites[0]
+			terrain.grass_sprite_tex_2 = t.grass_sprites[1]
+			terrain.grass_sprite_tex_3 = t.grass_sprites[2]
+			terrain.grass_sprite_tex_4 = t.grass_sprites[3]
+			terrain.grass_sprite_tex_5 = t.grass_sprites[4]
+			terrain.grass_sprite_tex_6 = t.grass_sprites[5]
+		if t.has_grass.size() >= 6:
+			terrain.tex1_has_grass = bool(t.has_grass[0])
+			terrain.tex2_has_grass = bool(t.has_grass[1])
+			terrain.tex3_has_grass = bool(t.has_grass[2])
+			terrain.tex4_has_grass = bool(t.has_grass[3])
+			terrain.tex5_has_grass = bool(t.has_grass[4])
+			terrain.tex6_has_grass = bool(t.has_grass[5])
+	else:
+		# Legacy fallback (first 6 only)
+		terrain.grass_sprite_tex_1 = t.grass_sprites[0]
+		terrain.grass_sprite_tex_2 = t.grass_sprites[1]
+		terrain.grass_sprite_tex_3 = t.grass_sprites[2]
+		terrain.grass_sprite_tex_4 = t.grass_sprites[3]
+		terrain.grass_sprite_tex_5 = t.grass_sprites[4]
+		terrain.grass_sprite_tex_6 = t.grass_sprites[5]
+		terrain.tex1_has_grass = true
+		terrain.tex2_has_grass = t.has_grass[0]
+		terrain.tex3_has_grass = t.has_grass[1]
+		terrain.tex4_has_grass = t.has_grass[2]
+		terrain.tex5_has_grass = t.has_grass[3]
+		terrain.tex6_has_grass = t.has_grass[4]
 
 
 
