@@ -128,6 +128,12 @@ var _fallback_mat: StandardMaterial3D
 var _chunk_parent: Node3D
 var _warned_no_camera: bool = false
 
+# Avoid scanning the entire scene tree for cameras every streaming tick.
+# (This fallback only runs if camera_paths and viewport cameras are not available.)
+var _cached_tree_cameras: Array[Camera3D] = []
+var _last_tree_camera_scan_msec: int = -1000000
+var _tree_camera_scan_cooldown_msec: int = 1000
+
 # MST-only streaming state (hysteresis: keep visible until outside unload radius)
 var _mst_streamed_visible: Dictionary = {} # key -> true
 
@@ -430,6 +436,25 @@ func _update_streaming() -> void:
 			_request_mesh(coords.x, coords.y, chunk.lod, d)
 
 
+func _get_tree_camera_candidates_cached() -> Array[Camera3D]:
+	var now := Time.get_ticks_msec()
+	if (now - _last_tree_camera_scan_msec) >= _tree_camera_scan_cooldown_msec:
+		_last_tree_camera_scan_msec = now
+		_cached_tree_cameras.clear()
+		var any := get_tree().root.find_children("*", "Camera3D", true, false)
+		for n in any:
+			if n is Camera3D:
+				_cached_tree_cameras.append(n)
+	
+	# Filter invalid refs (cameras can be freed between scans).
+	var valid: Array[Camera3D] = []
+	for c in _cached_tree_cameras:
+		if is_instance_valid(c):
+			valid.append(c)
+	_cached_tree_cameras = valid
+	return valid
+
+
 func _resolve_cameras() -> Array[Camera3D]:
 	var cams: Array[Camera3D] = []
 	for p in camera_paths:
@@ -449,17 +474,15 @@ func _resolve_cameras() -> Array[Camera3D]:
 		if tvp_cam and not cams.has(tvp_cam):
 			cams.append(tvp_cam)
 
-	# Fallback 3: find any camera in the scene tree.
+	# Fallback 3: find any camera in the scene tree (cached + rate-limited).
 	if cams.is_empty():
-		var any := get_tree().root.find_children("*", "Camera3D", true, false)
-		for n in any:
-			if n is Camera3D:
-				var c: Camera3D = n
-				if c.current and not cams.has(c):
-					cams.append(c)
-					break
+		var any := _get_tree_camera_candidates_cached()
+		for c in any:
+			if c.current and not cams.has(c):
+				cams.append(c)
+				break
 		# If none marked current, just take the first camera.
-		if cams.is_empty() and not any.is_empty() and any[0] is Camera3D:
+		if cams.is_empty() and not any.is_empty():
 			cams.append(any[0])
 
 	if cams.is_empty() and not _warned_no_camera:

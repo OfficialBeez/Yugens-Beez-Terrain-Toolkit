@@ -87,6 +87,61 @@ var _runtime_bake_queue: Array[MarchingSquaresTerrainChunk] = []
 ## Existing chunks need a one-time regen to pick up corrected wall material indices.
 @export_storage var _wall_material_pair_migrated : bool = false
 
+@export_category("Maintenance")
+## When enabled, the editor will automatically migrate embedded chunk data (old scenes)
+## into external storage (data_directory) on load.
+@export var auto_migrate_embedded_data: bool = true
+
+## When enabled, the editor will automatically apply one-time mesh migrations
+## (e.g. wall-tagging/wall-material fixes) by regenerating chunk meshes once.
+@export var auto_apply_one_time_migrations: bool = true
+
+## One-click operations (acts like buttons; will always appear unchecked).
+@export var migrate_embedded_data_now: bool:
+	get: return false
+	set(v):
+		if not v:
+			return
+		if not EngineWrapper.instance.is_editor():
+			push_warning("[MST] 'Migrate Embedded Data Now' is editor-only.")
+			return
+		call_deferred("_maintenance_migrate_embedded_data")
+
+@export var save_all_chunks_now: bool:
+	get: return false
+	set(v):
+		if not v:
+			return
+		if not EngineWrapper.instance.is_editor():
+			push_warning("[MST] 'Save All Chunks Now' is editor-only (it saves external .res files).")
+			return
+		call_deferred("_maintenance_save_all_chunks")
+
+@export var rebuild_all_chunks_now: bool:
+	get: return false
+	set(v):
+		if not v:
+			return
+		call_deferred("_maintenance_rebuild_all_chunks")
+
+@export var rebuild_all_chunk_meshes_now: bool:
+	get: return false
+	set(v):
+		if not v:
+			return
+		call_deferred("_maintenance_rebuild_all_chunk_meshes")
+
+@export var cleanup_orphaned_storage_now: bool:
+	get: return false
+	set(v):
+		if not v:
+			return
+		if not EngineWrapper.instance.is_editor():
+			push_warning("[MST] 'Cleanup Orphaned Storage Now' is editor-only.")
+			return
+		call_deferred("_maintenance_cleanup_orphaned_storage")
+
+@export_category("Terrain")
 #region global terrain settings
 # Terrain Settings
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var dimensions : Vector3i = Vector3i(33, 32, 33): # Total amount of height values in X and Z direction, and total height range
@@ -108,20 +163,17 @@ var _runtime_bake_queue: Array[MarchingSquaresTerrainChunk] = []
 		else:
 			terrain_material.set_shader_parameter("use_hard_textures", false)
 		terrain_material.set_shader_parameter("blend_mode", value)
-		for chunk: MarchingSquaresTerrainChunk in chunks.values():
-			chunk.regenerate_all_cells(true)
+		_request_chunk_regen(null, true)
 @export_custom(PROPERTY_HINT_RANGE, "9, 32", PROPERTY_USAGE_STORAGE) var extra_collision_layer : int = 9:
 	set(value):
 		extra_collision_layer = value
-		for chunk: MarchingSquaresTerrainChunk in chunks.values():
-			chunk.regenerate_all_cells(true)
+		_request_chunk_regen(null, true)
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var use_flat_normals : bool = false:
 	set(value):
 		use_flat_normals = value
 		terrain_material.set_shader_parameter("use_flat_normals", value)
+		_request_grass_regen()
 		for chunk: MarchingSquaresTerrainChunk in chunks.values():
-			if chunk.grass_planter:
-				chunk.grass_planter.regenerate_all_cells()
 			chunk.mark_dirty()
 
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var detail_normal_texture: Texture2D:
@@ -161,17 +213,14 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 	set(value):
 		collision_depth = value
 		if not is_batch_updating:
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.regenerate_mesh()
+			_request_chunk_mesh_regen()
 @export_custom(PROPERTY_HINT_RANGE, "0.005,0.5,0.005", PROPERTY_USAGE_STORAGE) var wall_threshold : float = 0.25: # Determines what part of the terrain's mesh are walls
 	set(value):
 		wall_threshold = clampf(float(value), 0.005, 0.5)
 		terrain_material.set_shader_parameter("wall_threshold", wall_threshold)
 		var grass_mat := grass_mesh.material as ShaderMaterial
 		grass_mat.set_shader_parameter("wall_threshold", wall_threshold)
-		for chunk: MarchingSquaresTerrainChunk in chunks.values():
-			if chunk.grass_planter:
-				chunk.grass_planter.regenerate_all_cells()
+		_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var ridge_threshold: float = 1.0:
 	set(value):
 		ridge_threshold = value
@@ -217,6 +266,7 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 		var grass_mat := grass_mesh.material as ShaderMaterial
 		grass_mat.set_shader_parameter("global_noise_texture", value)
 
+@export_category("Grass")
 # Grass settings
 @export var rebuild_grass_now: bool = false:
 	set(value):
@@ -258,7 +308,7 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 			if not chunk.grass_planter or not chunk.grass_planter.multimesh:
 				continue
 			chunk.grass_planter.multimesh.instance_count = (dimensions.x-1) * (dimensions.z-1) * grass_subdivisions * grass_subdivisions
-			chunk.grass_planter.regenerate_all_cells()
+		_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_size : Vector2 = Vector2(1.0, 1.0):
 	set(value):
 		grass_size = value
@@ -295,114 +345,103 @@ enum OutlineMode { OFF = 0, BLACK_SILHOUETTE = 1 }
 			grass_mat.set_shader_parameter("color_variation_strength", value)
 #endregion
 
+@export_category("Legacy (compat)")
+@export_group("Legacy Terrain Textures (1-15)")
 #region vertex painting texture settings
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_1 : Texture2D = null:
 	set(value):
 		texture_1 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(0, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_2 : Texture2D = null:
 	set(value):
 		texture_2 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(1, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_3 : Texture2D = null:
 	set(value):
 		texture_3 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(2, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_4 : Texture2D = null:
 	set(value):
 		texture_4 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(3, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_5 : Texture2D = null:
 	set(value):
 		texture_5 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(4, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_6 : Texture2D = null:
 	set(value):
 		texture_6 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(5, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_7 : Texture2D:
 	set(value):
 		texture_7 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(6, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_8 : Texture2D:
 	set(value):
 		texture_8 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(7, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_9 : Texture2D:
 	set(value):
 		texture_9 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(8, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_10 : Texture2D:
 	set(value):
 		texture_10 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(9, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_11 : Texture2D:
 	set(value):
 		texture_11 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(10, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_12 : Texture2D:
 	set(value):
 		texture_12 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(11, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_13 : Texture2D:
 	set(value):
 		texture_13 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(12, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_14 : Texture2D:
 	set(value):
 		texture_14 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(13, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_15 : Texture2D:
 	set(value):
 		texture_15 = value
 		if not is_batch_updating:
 			_set_legacy_texture_slot(14, value)
-			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+			_request_grass_regen()
 #endregion
 
+@export_group("")
+@export_category("Texture Slots (256)")
 #region texture slots (256)
 const MAX_TEXTURE_SLOTS := 256
 # Keep legacy VOID behavior for now (texture_15 in the old system).
@@ -435,6 +474,8 @@ var _warned_texture_array_slots: Dictionary = {}
 var _warned_grass_array_slots: Dictionary = {}
 #endregion
 
+@export_category("Legacy (compat)")
+@export_group("Legacy Grass Textures (1-6)")
 #region grass textures (legacy exports -> slot grass_texture)
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_sprite_tex_1 : Texture2D = preload("res://addons/MarchingSquaresTerrain/resources/plugin_materials/grass_leaf_sprite.png"):
 	set(value):
@@ -492,6 +533,7 @@ var _warned_grass_array_slots: Dictionary = {}
 			_request_grass_regen()
 #endregion
 
+@export_group("Legacy Has Grass Flags (1-6)")
 #region has grass variables (legacy exports -> slot has_grass)
 # Texture 1 was historically always-on; now exposed so "Base Grass" can be disabled.
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex1_has_grass : bool = true:
@@ -545,6 +587,7 @@ var _warned_grass_array_slots: Dictionary = {}
 			_request_grass_regen()
 #endregion
 
+@export_group("Legacy Migration Colors (1-6)")
 #region texture albedos
 #These are just for migration into the Palette system
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var tex1_color_1 : Color = Color("647851ff")
@@ -561,6 +604,7 @@ var _warned_grass_array_slots: Dictionary = {}
 
 #endregion
 
+@export_group("Legacy Texture Scales (1-15)")
 #region texture scales
 # Per-texture UV scaling (applied in shader)
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_scale_1 : float = 1.0:
@@ -640,8 +684,11 @@ var _warned_grass_array_slots: Dictionary = {}
 			_set_legacy_texture_scale(14, value)
 #endregion
 
+@export_group("")
+@export_category("Presets")
 @export_storage var current_texture_preset : MarchingSquaresTexturePreset = null
 
+@export_category("Vertex Painter")
 # Palette System
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var palette_colors: Array[Color] = []
 # Per palette-index weight (0-100). Used to control per-slot palette distribution.
@@ -651,7 +698,6 @@ var _warned_grass_array_slots: Dictionary = {}
 ]
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var slot_blend_modes: Array[int] = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
 
-@export_category("Vertex Painter")
 # Outline settings (per texture slot)
 # slot_has_outline[slot] enables a thin edge/foam line where that texture blends with another.
 # slot_outline_modes[slot]: 0 = darken Color 1, 1 = use last palette color
@@ -719,7 +765,7 @@ func _apply_default_wall_texture_change(old_idx: int, new_idx: int) -> void:
 		# Also update "unpainted" wall cells (those matching ground) to follow the new default.
 		changed = bool(chunk.apply_default_wall_to_unpainted(new_idx)) or changed
 		if changed:
-			chunk.regenerate_all_cells(true)
+			_request_chunk_regen(chunk, true)
 
 signal load_finished
 
@@ -850,6 +896,15 @@ var _internal_outline_rebuild_queue: Array[MarchingSquaresTerrainChunk] = []
 var _grass_regen_timer: Timer = null
 var _grass_regen_pending: bool = false
 
+var _chunk_regen_timer: Timer = null
+var _chunk_regen_pending: bool = false
+var _chunk_regen_all: bool = false
+var _chunk_regen_use_threads: bool = true
+var _chunk_regen_set: Dictionary = {} # MarchingSquaresTerrainChunk -> true
+
+var _chunk_mesh_regen_timer: Timer = null
+var _chunk_mesh_regen_pending: bool = false
+
 
 func _request_grass_regen() -> void:
 	if is_batch_updating:
@@ -879,6 +934,130 @@ func _apply_grass_regen() -> void:
 	for chunk: MarchingSquaresTerrainChunk in chunks.values():
 		if chunk and chunk.grass_planter:
 			chunk.grass_planter.regenerate_all_cells()
+
+
+func _request_chunk_regen(chunk: MarchingSquaresTerrainChunk = null, use_threads: bool = true) -> void:
+	if is_batch_updating:
+		return
+	_chunk_regen_use_threads = _chunk_regen_use_threads or use_threads
+	if chunk != null:
+		_chunk_regen_set[chunk] = true
+	else:
+		_chunk_regen_all = true
+
+	# Coalesce editor slider drags into a single chunk rebuild.
+	if EngineWrapper.instance.is_editor():
+		if not is_inside_tree():
+			_chunk_regen_pending = true
+			return
+		if _chunk_regen_timer == null:
+			_chunk_regen_timer = Timer.new()
+			_chunk_regen_timer.name = "_mst_chunk_regen_timer"
+			_chunk_regen_timer.one_shot = true
+			add_child(_chunk_regen_timer)
+			_chunk_regen_timer.timeout.connect(_apply_chunk_regen)
+		_chunk_regen_timer.wait_time = 0.12
+		_chunk_regen_timer.start()
+		return
+
+	_apply_chunk_regen()
+
+
+func _apply_chunk_regen() -> void:
+	var use_threads := _chunk_regen_use_threads
+	_chunk_regen_use_threads = true
+
+	if _chunk_regen_all:
+		_chunk_regen_all = false
+		_chunk_regen_set.clear()
+		for c: MarchingSquaresTerrainChunk in chunks.values():
+			if c:
+				c.regenerate_all_cells(use_threads)
+		return
+
+	var keys := _chunk_regen_set.keys()
+	_chunk_regen_set.clear()
+	for c in keys:
+		if is_instance_valid(c):
+			(c as MarchingSquaresTerrainChunk).regenerate_all_cells(use_threads)
+
+
+func _request_chunk_mesh_regen() -> void:
+	if is_batch_updating:
+		return
+
+	if EngineWrapper.instance.is_editor():
+		if not is_inside_tree():
+			_chunk_mesh_regen_pending = true
+			return
+		if _chunk_mesh_regen_timer == null:
+			_chunk_mesh_regen_timer = Timer.new()
+			_chunk_mesh_regen_timer.name = "_mst_chunk_mesh_regen_timer"
+			_chunk_mesh_regen_timer.one_shot = true
+			add_child(_chunk_mesh_regen_timer)
+			_chunk_mesh_regen_timer.timeout.connect(_apply_chunk_mesh_regen)
+		_chunk_mesh_regen_timer.wait_time = 0.12
+		_chunk_mesh_regen_timer.start()
+		return
+
+	_apply_chunk_mesh_regen()
+
+
+func _apply_chunk_mesh_regen() -> void:
+	var use_threads := EngineWrapper.instance.is_editor()
+	for c: MarchingSquaresTerrainChunk in chunks.values():
+		if c:
+			c.regenerate_mesh(use_threads)
+
+
+func _maintenance_migrate_embedded_data() -> void:
+	if not EngineWrapper.instance.is_editor():
+		return
+	_initialize_data_directory()
+	if data_directory.is_empty():
+		push_warning("[MST] Cannot migrate: data_directory is empty. Save the scene and try again.")
+		return
+	if not MSTDataHandler.needs_migration(self):
+		push_warning("[MST] No embedded data migration needed.")
+		return
+	push_warning("[MST] Migrating embedded chunk data to external storage: %s" % data_directory)
+	MSTDataHandler.migrate_to_external_storage(self)
+	push_warning("[MST] Migration finished. Please save the scene to persist changes.")
+
+
+func _maintenance_save_all_chunks() -> void:
+	if not EngineWrapper.instance.is_editor():
+		return
+	_initialize_data_directory()
+	MSTDataHandler.save_all_chunks(self)
+	push_warning("[MST] Saved dirty chunks to external storage. (If you recently migrated, save the scene too.)")
+
+
+func _maintenance_rebuild_all_chunks() -> void:
+	# Coalesced by regen debouncer in-editor.
+	_request_chunk_regen(null, true)
+
+
+func _maintenance_rebuild_all_chunk_meshes() -> void:
+	# This is a heavy operation; prefer threads in-editor.
+	var use_threads := EngineWrapper.instance.is_editor()
+	# If this rebuild is being used to pick up one-time mesh migrations, mark them applied
+	# so we don't keep prompting on every load.
+	if EngineWrapper.instance.is_editor():
+		_uv_wall_sentinel_migrated = true
+		_wall_material_pair_migrated = true
+	for c: MarchingSquaresTerrainChunk in chunks.values():
+		if c:
+			c.regenerate_mesh(use_threads)
+	push_warning("[MST] Rebuilt all chunk meshes. Please save the scene if this was a migration rebuild.")
+
+
+func _maintenance_cleanup_orphaned_storage() -> void:
+	if not EngineWrapper.instance.is_editor():
+		return
+	MSTDataHandler.cleanup_orphaned_chunk_files(self)
+	MSTDataHandler.cleanup_orphaned_terrain_directories(self)
+	push_warning("[MST] Cleaned up orphaned MST storage directories/files (if any).")
 
 
 func _request_outline_apply() -> void:
@@ -1397,8 +1576,13 @@ func _deferred_enter_tree() -> void:
 	if _storage_initialized:
 		MSTDataHandler.load_terrain_data(self)
 	elif EngineWrapper.instance.is_editor() and MSTDataHandler.needs_migration(self):
-		# Auto-migrate embedded data to external storage (editor only)
-		MSTDataHandler.migrate_to_external_storage(self)
+		# Embedded chunks exist (old scenes). Optionally migrate them to external storage.
+		if auto_migrate_embedded_data:
+			push_warning("[MST] Embedded chunk data detected; migrating to external storage: %s" % data_directory)
+			MSTDataHandler.migrate_to_external_storage(self)
+			push_warning("[MST] Migration finished. Please save the scene to persist changes.")
+		else:
+			push_warning("[MST] Embedded chunk data detected, but auto_migrate_embedded_data is disabled. Use Maintenance -> Migrate Embedded Data Now.")
 	
 	# Apply all persisted textures/colors to this terrain's unique shader materials
 	# This is needed because _init() creates fresh duplicated materials that don't have
@@ -1415,12 +1599,14 @@ func _deferred_enter_tree() -> void:
 	# One-time editor migrations: regenerate meshes so new wall tagging/material selection is present in geometry.
 	var force_regen_for_wall_fixes : bool = false
 	if EngineWrapper.instance.is_editor():
-		if not _uv_wall_sentinel_migrated:
+		var needs_wall_migration := (not _uv_wall_sentinel_migrated) or (not _wall_material_pair_migrated)
+		if needs_wall_migration and auto_apply_one_time_migrations:
 			_uv_wall_sentinel_migrated = true
-			force_regen_for_wall_fixes = true
-		if not _wall_material_pair_migrated:
 			_wall_material_pair_migrated = true
 			force_regen_for_wall_fixes = true
+			push_warning("[MST] Applying one-time mesh migration (wall tagging/material fix). Rebuilding chunk meshes once; please save the scene afterwards.")
+		elif needs_wall_migration:
+			push_warning("[MST] One-time mesh migration is pending (wall tagging/material fix). Enable auto_apply_one_time_migrations or use Maintenance -> Rebuild All Chunk Meshes Now, then save the scene.")
 	
 	# Initialize all chunks (regenerate mesh/grass from loaded data)
 	for chunk : MarchingSquaresTerrainChunk in chunks.values():
@@ -1437,6 +1623,12 @@ func _deferred_enter_tree() -> void:
 	if _grass_regen_pending:
 		_grass_regen_pending = false
 		_apply_grass_regen()
+	if _chunk_regen_pending:
+		_chunk_regen_pending = false
+		_apply_chunk_regen()
+	if _chunk_mesh_regen_pending:
+		_chunk_mesh_regen_pending = false
+		_apply_chunk_mesh_regen()
 	
 	load_finished.emit()
 
