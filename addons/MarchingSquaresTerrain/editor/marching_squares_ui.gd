@@ -122,7 +122,8 @@ func _on_tool_changed(tool_index: int) -> void:
 	
 	plugin.active_tool = tool_index
 	plugin.mode = tool_index
-	plugin.vertex_color_idx = 0 # Set to the first material on start # Working around a UI sync bug. #TODO: This is temp workaround - Possible refactor.
+	# Keep the currently selected vertex paint texture index.
+	# Resetting it here causes the selection to snap back to Texture 1 after each stroke on some setups.
 	tool_attributes.show_tool_attributes(active_tool)
 
 
@@ -168,14 +169,14 @@ func _on_setting_changed(p_setting_name: String, p_value: Variant) -> void:
 				plugin.current_texture_preset = null
 			plugin.current_terrain_node.force_batch_update()
 			plugin.current_terrain_node.is_batch_updating = false
-			for chunk: MarchingSquaresTerrainChunk in plugin.current_terrain_node.chunks.values():
+			for chunk : MarchingSquaresTerrainChunk in plugin.current_terrain_node.chunks.values():
 				chunk.mark_dirty()
 			tool_attributes.show_tool_attributes(active_tool)
 		"quick_paint_selection":
-					if p_value is MarchingSquaresQuickPaint:
-						plugin.current_quick_paint = p_value
-					else:
-						plugin.current_quick_paint = null
+			if p_value is MarchingSquaresQuickPaint:
+				plugin.current_quick_paint = p_value
+			else:
+				plugin.current_quick_paint = null
 		"paint_walls":
 			if p_value is bool:
 				plugin.paint_walls_mode = p_value

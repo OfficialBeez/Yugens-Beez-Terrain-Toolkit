@@ -726,7 +726,7 @@ func _get_setting_value(p_setting_name: String) -> Variant:
 		"height":
 			return plugin.height
 		"strength":
-			return plugin.height
+			return plugin.strength
 		"flatten":
 			return plugin.flatten
 		"falloff":

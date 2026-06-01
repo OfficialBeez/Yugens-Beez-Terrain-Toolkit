@@ -1,6 +1,7 @@
 @tool
 extends EditorPlugin
 class_name MarchingSquaresTerrainPlugin
+## Main editor plugin for creating/editing MarchingSquaresTerrain nodes.
 
 
 static var instance : MarchingSquaresTerrainPlugin
@@ -9,37 +10,9 @@ static var instance : MarchingSquaresTerrainPlugin
 const MAX_TEXTURE_SLOTS := 256
 
 
-static func _ensure_texture_names_resource(res: Resource) -> void:
-	if res == null:
-		return
-	var names := res.get("texture_names")
-	if not (names is Array):
-		names = []
-	# Seed defaults if empty.
-	if names.is_empty():
-		names = [
-			"Base Grass", "Texture 2 (g)", "Texture 3 (g)", "Texture 4 (g)",
-			"Texture 5 (g)", "Texture 6 (g)", "Texture 7", "Texture 8",
-			"Texture 9", "Texture 10", "Texture 11", "Texture 12",
-			"Texture 13", "Texture 14", "Texture 15", "Void",
-		]
-	# Extend/truncate to MAX_TEXTURE_SLOTS.
-	if names.size() < MAX_TEXTURE_SLOTS:
-		for i in range(names.size(), MAX_TEXTURE_SLOTS):
-			names.append("Texture %d" % (i + 1))
-	elif names.size() > MAX_TEXTURE_SLOTS:
-		names.resize(MAX_TEXTURE_SLOTS)
-
-	# Keep the legacy void slot name stable/obvious.
-	# (Void is slot 15 internally; UI may display it as "Texture 16" if using 1-based numbering.)
-	var VOID_SLOT := 15
-	if names.size() > VOID_SLOT:
-		names[VOID_SLOT] = "Void"
-
-	res.set("texture_names", names)
-
 const EMPTY_TEXTURE_PRESET : MarchingSquaresTexturePreset = preload("uid://db4scsn2nqqyu")
 const BrushPatternCalculator = preload("uid://bli1mnri3jwpa")
+
 
 var vp_texture_names : MarchingSquaresTextureNames = preload("uid://dd7fens03aosa")
 
@@ -167,7 +140,7 @@ var draw_height : float
 var is_setting : bool
 
 # Variable for keeping the brush tool static when restarting the plugin
-var _is_reselecting: bool = false
+var _is_reselecting : bool = false
 
 var is_making_bridge : bool
 var bridge_start_pos : Vector3
@@ -186,13 +159,43 @@ var queued_ray_result := {}
 #endregion
 
 
+static func _ensure_texture_names_resource(res: Resource) -> void:
+	if res == null:
+		return
+	var names := res.get("texture_names")
+	if not (names is Array):
+		names = []
+	# Seed defaults if empty.
+	if names.is_empty():
+		names = [
+			"Base Grass", "Texture 2 (g)", "Texture 3 (g)", "Texture 4 (g)",
+			"Texture 5 (g)", "Texture 6 (g)", "Texture 7", "Texture 8",
+			"Texture 9", "Texture 10", "Texture 11", "Texture 12",
+			"Texture 13", "Texture 14", "Texture 15", "Void",
+		]
+	# Extend/truncate to MAX_TEXTURE_SLOTS.
+	if names.size() < MAX_TEXTURE_SLOTS:
+		for i in range(names.size(), MAX_TEXTURE_SLOTS):
+			names.append("Texture %d" % (i + 1))
+	elif names.size() > MAX_TEXTURE_SLOTS:
+		names.resize(MAX_TEXTURE_SLOTS)
+
+	# Keep the legacy void slot name stable/obvious.
+	# (Void is slot 15 internally; UI may display it as "Texture 16" if using 1-based numbering.)
+	var void_slot := 15
+	if names.size() > void_slot:
+		names[void_slot] = "Void"
+
+	res.set("texture_names", names)
+
+
 func _enter_tree():
 	instance = self
-	# texture_names.tres is used for dropdown enums; but in-editor it can load as a
+	# Texture names resource is used for dropdown enums; but in-editor it can load as a
 	# PlaceholderResource (scripts not loaded yet). Avoid calling methods on it.
 	_ensure_texture_names_resource(vp_texture_names)
 	call_deferred("_deferred_enter_tree")
-	
+
 	print_rich("Welcome to [color=MEDIUM_ORCHID][url=https://www.youtube.com/@yugen_seishin]Yūgen[/url][/color]'s [wave]Marching Squares Terrain Authoring Toolkit[/wave]\nThis plugin is under MIT license")
 
 
@@ -287,6 +290,7 @@ func _refresh_editor_state() -> void:
 			node.update_gizmos()
 			if node is MarchingSquaresTerrain and node in EditorInterface.get_selection().get_selected_nodes():
 				EditorInterface.edit_node(node)
+
 
 func _ready():
 	if BRUSH_RADIUS_MATERIAL:
