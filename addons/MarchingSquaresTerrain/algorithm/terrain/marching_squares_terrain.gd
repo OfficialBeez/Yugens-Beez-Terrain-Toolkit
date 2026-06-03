@@ -102,6 +102,33 @@ enum StorageMode {
 		extra_collision_layer = value
 		for chunk: MarchingSquaresTerrainChunk in chunks.values():
 			chunk.regenerate_all_cells(true)
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var collision_depth : float = 0.0:
+	set(value):
+		collision_depth = maxf(float(value), 0.0)
+		if not is_batch_updating:
+			for chunk: MarchingSquaresTerrainChunk in chunks.values():
+				chunk.create_collision_with_depth(collision_depth)
+				chunk.mark_dirty()
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var detail_normal_texture : Texture2D:
+	set(value):
+		detail_normal_texture = value
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("detail_normal_texture", value)
+
+@export_custom(PROPERTY_HINT_RANGE, "0.001,5.0,0.001", PROPERTY_USAGE_STORAGE) var detail_normal_scale : float = 0.25:
+	set(value):
+		detail_normal_scale = clampf(float(value), 0.001, 5.0)
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("detail_normal_scale", detail_normal_scale)
+
+@export_custom(PROPERTY_HINT_RANGE, "0.0,1.0,0.01", PROPERTY_USAGE_STORAGE) var detail_normal_strength : float = 0.0:
+	set(value):
+		detail_normal_strength = clampf(float(value), 0.0, 1.0)
+		if not is_batch_updating:
+			terrain_material.set_shader_parameter("detail_normal_strength", detail_normal_strength)
+
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var wall_threshold : float = 0.0: # Determines what part of the terrain's mesh are walls
 	set(value):
 		wall_threshold = value
@@ -109,7 +136,8 @@ enum StorageMode {
 		var grass_mat := grass_mesh.material as ShaderMaterial
 		grass_mat.set_shader_parameter("wall_threshold", value)
 		for chunk: MarchingSquaresTerrainChunk in chunks.values():
-			chunk.grass_planter.regenerate_all_cells()
+			if chunk.grass_planter:
+				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var ridge_threshold: float = 1.0:
 	set(value):
 		ridge_threshold = value
@@ -138,16 +166,18 @@ enum StorageMode {
 	set(value):
 		grass_subdivisions = value
 		for chunk: MarchingSquaresTerrainChunk in chunks.values():
-			chunk.grass_planter.multimesh.instance_count = (dimensions.x-1) * (dimensions.z-1) * grass_subdivisions * grass_subdivisions
-			chunk.grass_planter.regenerate_all_cells()
+			if chunk.grass_planter and chunk.grass_planter.multimesh:
+				chunk.grass_planter.multimesh.instance_count = (dimensions.x-1) * (dimensions.z-1) * grass_subdivisions * grass_subdivisions
+				chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_size : Vector2 = Vector2(1.0, 1.0):
 	set(value):
 		grass_size = value
 		var scale_factor := (cell_size.x + cell_size.y) / 4.0
 		var scaled_value := value * scale_factor
 		for chunk: MarchingSquaresTerrainChunk in chunks.values():
-			chunk.grass_planter.multimesh.mesh.size = scaled_value
-			chunk.grass_planter.multimesh.mesh.center_offset.y = scaled_value.y / 2.0
+			if chunk.grass_planter and chunk.grass_planter.multimesh and chunk.grass_planter.multimesh.mesh:
+				chunk.grass_planter.multimesh.mesh.size = scaled_value
+				chunk.grass_planter.multimesh.mesh.center_offset.y = scaled_value.y / 2.0
 #endregion
 
 #region vertex painting texture settings
@@ -162,7 +192,8 @@ enum StorageMode {
 			else:
 				grass_mat.set_shader_parameter("use_base_color_1", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_2 : Texture2D = preload("uid://dbnc04k3n0sro"):
 	set(value):
 		texture_2 = value
@@ -174,7 +205,8 @@ enum StorageMode {
 			else:
 				grass_mat.set_shader_parameter("use_base_color_2", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_3 : Texture2D = preload("uid://dbnc04k3n0sro"):
 	set(value):
 		texture_3 = value
@@ -186,7 +218,8 @@ enum StorageMode {
 			else:
 				grass_mat.set_shader_parameter("use_base_color_3", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_4 : Texture2D = preload("uid://dbnc04k3n0sro"):
 	set(value):
 		texture_4 = value
@@ -198,7 +231,8 @@ enum StorageMode {
 			else:
 				grass_mat.set_shader_parameter("use_base_color_4", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_5 : Texture2D = preload("uid://dbnc04k3n0sro"):
 	set(value):
 		texture_5 = value
@@ -210,7 +244,8 @@ enum StorageMode {
 			else:
 				grass_mat.set_shader_parameter("use_base_color_5", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_6 : Texture2D = preload("uid://cv87twjgbqq0s"):
 	set(value):
 		texture_6 = value
@@ -222,70 +257,80 @@ enum StorageMode {
 			else:
 				grass_mat.set_shader_parameter("use_base_color_6", true)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_7 : Texture2D:
 	set(value):
 		texture_7 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_gb", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_8 : Texture2D:
 	set(value):
 		texture_8 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_ga", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_9 : Texture2D:
 	set(value):
 		texture_9 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_br", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_10 : Texture2D:
 	set(value):
 		texture_10 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_bg", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_11 : Texture2D:
 	set(value):
 		texture_11 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_bb", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_12 : Texture2D:
 	set(value):
 		texture_12 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_ba", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_13 : Texture2D:
 	set(value):
 		texture_13 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_ar", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_14 : Texture2D:
 	set(value):
 		texture_14 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_ag", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var texture_15 : Texture2D:
 	set(value):
 		texture_15 = value
 		if not is_batch_updating:
 			terrain_material.set_shader_parameter("vc_tex_ab", value)
 			for chunk: MarchingSquaresTerrainChunk in chunks.values():
-				chunk.grass_planter.regenerate_all_cells()
+				if chunk.grass_planter:
+					chunk.grass_planter.regenerate_all_cells()
 #endregion
 
 #region grass textures
@@ -514,9 +559,14 @@ func _init() -> void:
 	# Create unique copies of shared resources for this node instance
 	# This prevents texture/material changes from affecting other MarchingSquaresTerrain nodes
 	terrain_material = preload("uid://bahbybbjwkhlg").duplicate(true)
-	var base_grass_mesh := preload("uid://h41fuxldpf1u")
+
+	# Prefer path-based preload here to avoid UID mismatch across branches/projects.
+	var base_grass_mesh: QuadMesh = preload("res://addons/MarchingSquaresTerrain/resources/plugin_materials/mst_grass_mesh.tres") as QuadMesh
+	if base_grass_mesh == null:
+		base_grass_mesh = QuadMesh.new()
 	grass_mesh = base_grass_mesh.duplicate(true)
-	grass_mesh.material = base_grass_mesh.material.duplicate(true)
+	if base_grass_mesh.material:
+		grass_mesh.material = base_grass_mesh.material.duplicate(true)
 	print_verbose("Last storage mode: ", _last_storage_mode)
 
 
@@ -741,6 +791,9 @@ func force_batch_update() -> void:
 	# TERRAIN MATERIAL - Core parameters
 	terrain_material.set_shader_parameter("chunk_size", dimensions)
 	terrain_material.set_shader_parameter("cell_size", cell_size)
+	terrain_material.set_shader_parameter("detail_normal_texture", detail_normal_texture)
+	terrain_material.set_shader_parameter("detail_normal_scale", detail_normal_scale)
+	terrain_material.set_shader_parameter("detail_normal_strength", detail_normal_strength)
 	
 	# TERRAIN MATERIAL - Ground Textures
 	terrain_material.set_shader_parameter("vc_tex_rr", texture_1)

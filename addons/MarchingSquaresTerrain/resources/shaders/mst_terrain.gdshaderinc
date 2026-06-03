@@ -50,6 +50,13 @@ uniform float tex_scale_14 : hint_range(0.1, 20.0, 0.1) = 1.0;
 uniform float tex_scale_15 : hint_range(0.1, 20.0, 0.1) = 1.0;
 group_uniforms;
 
+group_uniforms Visuals.Normals;
+// Detail normal map (tangent-space / "blue" normal maps) tiled in world-space.
+uniform sampler2D detail_normal_texture : hint_normal, repeat_enable, filter_linear;
+uniform float detail_normal_scale : hint_range(0.001, 5.0, 0.001) = 0.25;
+uniform float detail_normal_strength : hint_range(0.0, 1.0, 0.01) = 0.0;
+group_uniforms;
+
 group_uniforms Effects.Blending;
 // true = Original behavior (single material, hard edges, works with "Perfect Square Tiles")
 // false = Smooth blending between materials (works with "Mixed Triangles")
@@ -119,6 +126,21 @@ float noise(vec2 p) {
 	float c = hash(i + vec2(0.0, 1.0));
 	float d = hash(i + vec2(1.0, 1.0));
 	return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+vec3 _mst_unpack_normal_map(vec3 c) {
+	// Unpack tangent-space normal from [0..1] to [-1..1].
+	return normalize(c * 2.0 - 1.0);
+}
+
+vec3 _mst_detail_normal_to_ts(vec2 uv, float strength) {
+	// True tangent-space normal map ("blue" normal maps).
+	// strength acts like intensity (similar scale to the prior faux normal path).
+	float s = clamp(strength, 0.0, 1.0);
+	vec3 nts = _mst_unpack_normal_map(texture(detail_normal_texture, uv).rgb);
+	nts.xy *= (s * 8.0);
+	nts = normalize(vec3(nts.xy, nts.z));
+	return normalize(mix(vec3(0.0, 0.0, 1.0), nts, s));
 }
 
 // Original: Get material index from vertex colors (used in vertex shader for hard edges)
@@ -359,6 +381,36 @@ void fragment() {
 	vec3 abs_normal = abs(vertex_normal);
 	vec3 tri_weights = vec3(abs_normal.x, 0.0, abs_normal.z);
 	tri_weights /= (tri_weights.x + tri_weights.z);
+
+	// Global detail normal / noise (visual only)
+	if (detail_normal_strength > 0.001) {
+		float dn = clamp(detail_normal_strength, 0.0, 1.0);
+
+		// Per-plane UVs derived from world position so it tiles consistently across chunks.
+		vec2 duv_floor = fract(world_pos.xz * detail_normal_scale);
+		vec2 duv_x = fract(vec2(world_pos.z, world_pos.y) * detail_normal_scale);
+		vec2 duv_z = fract(vec2(world_pos.x, world_pos.y) * detail_normal_scale);
+
+		vec3 nts_floor = _mst_detail_normal_to_ts(duv_floor, dn);
+		vec3 nts_x = _mst_detail_normal_to_ts(duv_x, dn);
+		vec3 nts_z = _mst_detail_normal_to_ts(duv_z, dn);
+
+		float sx = (vertex_normal.x >= 0.0) ? 1.0 : -1.0;
+		float sz = (vertex_normal.z >= 0.0) ? 1.0 : -1.0;
+
+		// Convert from tangent-space normal to a local-space normal for each projection plane.
+		vec3 n_local_floor = normalize(vec3(nts_floor.x, nts_floor.z, nts_floor.y));
+		vec3 n_local_x = normalize(vec3(nts_x.z * sx, nts_x.y, nts_x.x));
+		vec3 n_local_z = normalize(vec3(nts_z.x, nts_z.y, nts_z.z * sz));
+
+		vec3 w = vec3(abs_normal.x, 0.0, abs_normal.z);
+		float denom = max(w.x + w.z, 0.00001);
+		w /= denom;
+
+		vec3 n_local = is_floor ? n_local_floor : normalize(n_local_x * w.x + n_local_z * w.z);
+		vec3 n_view = normalize((VIEW_MATRIX * MODEL_MATRIX * vec4(n_local, 0.0)).xyz);
+		NORMAL = normalize(mix(NORMAL, n_view, dn));
+	}
 
 	vec4 floor_color;
 	vec3 wall_color;

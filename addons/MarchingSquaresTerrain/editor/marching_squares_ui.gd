@@ -246,6 +246,18 @@ func _on_terrain_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 				# +1 because collision layers don't start from 0 like indexed items
 				# +8 because the selectable collision layers range from 9 to 32
 				terrain.extra_collision_layer = p_value + 9
+		"collision_depth":
+			if p_value is float or p_value is int:
+				terrain.collision_depth = float(p_value)
+		"detail_normal_texture":
+			if p_value is Texture2D or p_value == null:
+				terrain.detail_normal_texture = p_value
+		"detail_normal_scale":
+			if p_value is float or p_value is int:
+				terrain.detail_normal_scale = float(p_value)
+		"detail_normal_strength":
+			if p_value is float or p_value is int:
+				terrain.detail_normal_strength = float(p_value)
 
 
 func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> void:

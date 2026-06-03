@@ -631,15 +631,8 @@ func draw_pattern(terrain: MarchingSquaresTerrain):
 				if bridge_length < 0.5 or draw_chunk_dict.size() < 3: # Skip small bridges so the terrain doesn't glitch
 					return
 				
-				# Convert cell to world-space
-				var global_cell := Vector2(
-					(draw_chunk_coords.x * terrain.dimensions.x + draw_cell_coords.x) * terrain.cell_size.x,
-					(draw_chunk_coords.y * terrain.dimensions.z + draw_cell_coords.y) * terrain.cell_size.y)
-				
-				if draw_chunk_coords != first_chunk:
-					global_cell.x += (first_chunk.x - draw_chunk_coords.x) * terrain.cell_size.x
-				if draw_chunk_coords != first_chunk:
-					global_cell.y += (first_chunk.y - draw_chunk_coords.y) * terrain.cell_size.y
+				# Convert cell to world-space (must match BrushPatternCalculator's chunk stride math)
+				var global_cell := BrushPatternCalculator.cell_to_world_pos(draw_chunk_coords, draw_cell_coords, terrain)
 				
 				# Calculate the 2D bridge direction vector
 				var bridge_dir := (b_end - b_start) / bridge_length
@@ -651,8 +644,25 @@ func draw_pattern(terrain: MarchingSquaresTerrain):
 					progress = ease(progress, ease_value)
 				var bridge_height := lerpf(bridge_start_pos.y, brush_position.y, progress)
 				
+				# Bridge edge falloff (cross-section): keep a flat interior, only soften the outskirts.
+				# Note: Bridge tool disables the normal brush falloff in the UI, so we compute our own.
+				var bridge_half_width := maxf(brush_size * 0.5, 0.001)
+				var bridge_perp := Vector2(-bridge_dir.y, bridge_dir.x)
+				var lateral_dist := absf(cell_vec.dot(bridge_perp))
+
+				# Interior plateau portion (0..1): 0.75 means 75% of half-width is fully flat.
+				var plateau_ratio := 0.75
+				var plateau_half_width := bridge_half_width * plateau_ratio
+				var falloff_width := maxf(bridge_half_width - plateau_half_width, 0.001)
+
+				var edge_sample := 1.0
+				if lateral_dist > plateau_half_width:
+					var edge_u := clampf((lateral_dist - plateau_half_width) / falloff_width, 0.0, 1.0)
+					var edge_t := 1.0 - edge_u
+					edge_sample = falloff_curve.sample(clampf(edge_t, 0.001, 0.999))
+
 				restore_value = chunk.get_height(draw_cell_coords)
-				draw_value = bridge_height
+				draw_value = lerp(restore_value, bridge_height, edge_sample)
 			elif mode == TerrainToolMode.VERTEX_PAINTING:
 				if paint_walls_mode:
 					restore_value = chunk.get_wall_color_0(draw_cell_coords)

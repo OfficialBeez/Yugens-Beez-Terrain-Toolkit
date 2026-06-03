@@ -5,6 +5,8 @@ class_name MarchingSquaresTerrainChunk
 
 enum Mode {CUBIC, POLYHEDRON, ROUNDED_POLYHEDRON, SEMI_ROUND, SPHERICAL}
 
+enum GrassMode {REGULAR, GRASSLESS}
+
 const MERGE_MODE = {
 	Mode.CUBIC: 0.6,
 	Mode.POLYHEDRON: 1.3,
@@ -16,6 +18,16 @@ const MERGE_MODE = {
 # These two need to be normal export vars or else godot's internal logic crashes the plugin
 @export var terrain_system : MarchingSquaresTerrain
 @export var chunk_coords : Vector2i = Vector2i.ZERO
+
+@export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var grass_mode : GrassMode = GrassMode.REGULAR:
+	set(value):
+		if grass_mode == value:
+			return
+		var should_regenerate_grass := (grass_mode == GrassMode.GRASSLESS and value == GrassMode.REGULAR)
+		grass_mode = value
+		if is_inside_tree():
+			_apply_grass_mode(should_regenerate_grass)
+			mark_dirty()
 
 @export_custom(PROPERTY_HINT_NONE, "", PROPERTY_USAGE_STORAGE) var merge_mode : Mode = Mode.POLYHEDRON: # The max height distance between points before a wall is created between them
 	set(mode):
@@ -92,33 +104,6 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 		for x in range(dimensions.x - 1):
 			needs_update[z].append(true)
 	
-	if not get_node_or_null("GrassPlanter"):
-		grass_planter = get_node_or_null("GrassPlanter")
-		if not grass_planter:
-			grass_planter = MarchingSquaresGrassPlanter.new()
-			if not color_map_0 or not color_map_1:
-				generate_color_maps()
-			if not grass_mask_map:
-				generate_grass_mask_map()
-			add_child(grass_planter)
-		grass_planter.name = "GrassPlanter"
-		grass_planter._chunk = self
-		grass_planter.setup(self)
-		EngineWrapper.instance.set_owner_recursive(grass_planter)
-	else:
-		if not grass_planter:
-			grass_planter = get_node_or_null("GrassPlanter")
-		grass_planter.terrain_system = terrain_system
-		grass_planter._chunk = self
-		
-	if _temp_grass_multimesh:
-		grass_planter.multimesh = _temp_grass_multimesh
-	grass_planter.ensure_multimesh_count()
-	if not grass_planter.multimesh:
-		grass_planter.setup(self)
-		grass_planter.regenerate_all_cells()
-	grass_planter.multimesh.mesh = terrain_system.grass_mesh
-	
 	# Generate maps if not loaded from external storage (works for both editor and runtime)
 	if not height_map:
 		generate_height_map()
@@ -128,7 +113,9 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 		generate_wall_color_maps()
 	if not grass_mask_map:
 		generate_grass_mask_map()
-	
+
+	_apply_grass_mode()
+
 	if not mesh and should_regenerate_mesh:
 		regenerate_mesh(true)
 	elif mesh:
@@ -140,14 +127,15 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 			for child in get_children():
 				if child is StaticBody3D:
 					child.free()
-			create_trimesh_collision()
-			for child in get_children():
-				if child is StaticBody3D:
-					child.collision_layer = 17
-					child.set_collision_layer_value(terrain_system.extra_collision_layer, true)
-					for _child in child.get_children():
-						if _child is CollisionShape3D:
-							_child.set_visible(false)
+			if terrain_system:
+				create_collision_with_depth(terrain_system.collision_depth)
+			else:
+				create_trimesh_collision()
+
+	# On load, setup() allocates the MultiMesh but does not populate instances.
+	# Force a one-time full regen so Regular chunks show grass immediately.
+	if grass_mode == GrassMode.REGULAR and grass_planter:
+		grass_planter.regenerate_all_cells()
 	
 	if not EngineWrapper.instance.is_editor() and terrain_system.enable_runtime_texture_baking:
 		var baker := MarchingSquaresGeometryBaker.new()
@@ -167,6 +155,50 @@ func initialize_terrain(should_regenerate_mesh: bool = true):
 			mesh.surface_set_material(0, mat)
 		, CONNECT_ONE_SHOT)
 		baker.bake_geometry_texture(self, get_tree())
+
+
+func _apply_grass_mode(should_regenerate_grass: bool = false) -> void:
+	if grass_mode == GrassMode.GRASSLESS:
+		var existing := get_node_or_null("GrassPlanter")
+		if existing:
+			existing.name += "_"
+			existing.queue_free()
+		grass_planter = null
+		return
+
+	# Regular grass chunks: ensure planter exists and is set up.
+	if not color_map_0 or not color_map_1:
+		generate_color_maps()
+	if not grass_mask_map:
+		generate_grass_mask_map()
+
+	var existing_planter := get_node_or_null("GrassPlanter") as MarchingSquaresGrassPlanter
+	if existing_planter:
+		grass_planter = existing_planter
+	else:
+		grass_planter = MarchingSquaresGrassPlanter.new()
+		add_child(grass_planter)
+		grass_planter.name = "GrassPlanter"
+		EngineWrapper.instance.set_owner_recursive(grass_planter)
+
+	grass_planter.name = "GrassPlanter"
+	grass_planter.terrain_system = terrain_system
+	grass_planter._chunk = self
+
+	if _temp_grass_multimesh:
+		grass_planter.multimesh = _temp_grass_multimesh
+
+	grass_planter.setup(self)
+	grass_planter.ensure_multimesh_count()
+	if not grass_planter.multimesh:
+		grass_planter.setup(self)
+		grass_planter.regenerate_all_cells()
+
+	if terrain_system and grass_planter.multimesh:
+		grass_planter.multimesh.mesh = terrain_system.grass_mesh
+
+	if should_regenerate_grass and grass_planter and grass_planter.multimesh:
+		grass_planter.regenerate_all_cells()
 
 
 func _notification(what: int) -> void:
@@ -287,14 +319,10 @@ func regenerate_mesh(use_threads: bool = false):
 	for child in get_children():
 		if child is StaticBody3D:
 			child.free()
-	create_trimesh_collision()
-	for child in get_children():
-		if child is StaticBody3D:
-			child.collision_layer = 17
-			child.set_collision_layer_value(terrain_system.extra_collision_layer, true)
-			for _child in child.get_children():
-				if _child is CollisionShape3D:
-					_child.set_visible(false)
+	if terrain_system:
+		create_collision_with_depth(terrain_system.collision_depth)
+	else:
+		create_trimesh_collision()
 	
 	var elapsed_time : int = Time.get_ticks_msec() - start_time
 	print_verbose("Generated terrain in "+str(elapsed_time)+"ms")
@@ -617,6 +645,71 @@ func _recreate_collision_body() -> void:
 		for group in get_groups():
 			if group.begins_with("navmesh_"):
 				body.add_to_group(group)
+
+
+# This recreates the concave collision shape but adds optional depth extrusion below floor faces.
+func create_collision_with_depth(depth: float) -> void:
+	if mesh == null:
+		return
+
+	for child in get_children():
+		if child is StaticBody3D:
+			child.free()
+
+	var body := StaticBody3D.new()
+	body.name = name + "_col"
+	body.collision_layer = 17
+	if terrain_system:
+		body.set_collision_layer_value(terrain_system.extra_collision_layer, true)
+
+	var col_shape := CollisionShape3D.new()
+	col_shape.name = "CollisionShape3D"
+	col_shape.visible = false
+	body.add_child(col_shape)
+	add_child(body)
+
+	# Set owner for editor visibility at first, but we clear it later
+	if EngineWrapper.instance.is_editor():
+		var scene_root = EngineWrapper.instance.get_root_for_node(self)
+		if scene_root:
+			body.owner = scene_root
+			col_shape.owner = scene_root
+		for group in get_groups():
+			if group.begins_with("navmesh_"):
+				body.add_to_group(group)
+
+	var surface_faces: PackedVector3Array = mesh.get_faces()
+	var all_faces: PackedVector3Array = surface_faces
+
+	if depth > 0.0:
+		var extra_faces := PackedVector3Array()
+		var thr: float = terrain_system.wall_threshold if terrain_system else 0.25
+		var i := 0
+		while i < surface_faces.size():
+			var v0 := surface_faces[i]
+			var v1 := surface_faces[i + 1]
+			var v2 := surface_faces[i + 2]
+			var normal := (v1 - v0).cross(v2 - v0).normalized()
+			if absf(normal.y) > thr:
+				var d := Vector3(0, -depth, 0)
+				var v0b := v0 + d
+				var v1b := v1 + d
+				var v2b := v2 + d
+				# Bottom face (flipped winding)
+				extra_faces.append_array([v0b, v2b, v1b])
+				# Side walls
+				extra_faces.append_array([v0, v1, v1b, v0, v1b, v0b])
+				extra_faces.append_array([v1, v2, v2b, v1, v2b, v1b])
+				extra_faces.append_array([v2, v0, v0b, v2, v0b, v2b])
+			i += 3
+
+		all_faces = PackedVector3Array()
+		all_faces.append_array(surface_faces)
+		all_faces.append_array(extra_faces)
+
+	var shape := ConcavePolygonShape3D.new()
+	shape.set_faces(all_faces)
+	col_shape.shape = shape
 
 
 func regenerate_all_cells(use_threads: bool):

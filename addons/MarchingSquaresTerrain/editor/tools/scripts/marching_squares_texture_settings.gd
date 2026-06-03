@@ -128,6 +128,19 @@ func add_texture_settings() -> void:
 		editor_r_picker.set_base_type("Texture2D")
 		editor_r_picker.edited_resource = tex_var
 		editor_r_picker.resource_changed.connect(func(resource): _on_texture_setting_changed(VAR_NAMES[i].get("tex_var"), resource))
+		if editor_r_picker.has_signal("resource_selected"):
+			editor_r_picker.connect("resource_selected", func(resource: Resource, edit: bool):
+				if edit and resource:
+					if EditorInterface and EditorInterface.has_method("edit_resource"):
+						EditorInterface.edit_resource(resource)
+					elif EditorInterface:
+						EditorInterface.inspect_object(resource)
+			)
+		elif editor_r_picker.has_signal("resource_picked"):
+			editor_r_picker.connect("resource_picked", func(resource: Resource):
+				if resource and EditorInterface:
+					EditorInterface.inspect_object(resource)
+			)
 		editor_r_picker.set_custom_minimum_size(Vector2(100, 25))
 		
 		vbox.add_child(editor_r_picker, true)
@@ -182,12 +195,27 @@ func add_texture_settings() -> void:
 			editor_r_picker2.set_base_type("Texture2D")
 			editor_r_picker2.edited_resource = sprite_var
 			editor_r_picker2.resource_changed.connect(func(resource): _on_texture_setting_changed(VAR_NAMES[i].get("sprite_var"), resource))
+			if editor_r_picker2.has_signal("resource_selected"):
+				editor_r_picker2.connect("resource_selected", func(resource: Resource, edit: bool):
+					if edit and resource:
+						if EditorInterface and EditorInterface.has_method("edit_resource"):
+							EditorInterface.edit_resource(resource)
+						elif EditorInterface:
+							EditorInterface.inspect_object(resource)
+				)
+			elif editor_r_picker2.has_signal("resource_picked"):
+				editor_r_picker2.connect("resource_picked", func(resource: Resource):
+					if resource and EditorInterface:
+						EditorInterface.inspect_object(resource)
+				)
 			editor_r_picker2.set_custom_minimum_size(Vector2(100, 25))
 			
 			vbox.add_child(editor_r_picker2, true)
 			
 			# Add the vertex ground color
 			color_var = terrain.get(VAR_NAMES[i].get("color_var"))
+			if not (color_var is Color):
+				color_var = Color(1.0, 1.0, 1.0, 1.0)
 			var c_pick_button := ColorPickerButton.new()
 			c_pick_button.color = color_var
 			c_pick_button.color_changed.connect(func(color): _on_texture_setting_changed(VAR_NAMES[i].get("color_var"), color))
@@ -231,4 +259,5 @@ func _on_texture_setting_changed(p_setting_name: String, p_value: Variant) -> vo
 
 func _on_slider_drag_ended(ended: bool) -> void:
 	for chunk: MarchingSquaresTerrainChunk in plugin.current_terrain_node.chunks.values():
-		chunk.grass_planter.regenerate_all_cells()
+		if chunk.grass_planter:
+			chunk.grass_planter.regenerate_all_cells()
